@@ -51,18 +51,26 @@ class TwitchClipBot:
     async def authenticate(self) -> bool:
         """Get OAuth access token from Twitch API"""
         try:
-            url = "https://id.twitch.tv/oauth2/token"
-            params = {
-                'client_id': self.client_id,
-                'client_secret': self.client_secret,
-                'grant_type': 'client_credentials'
-            }
-            
-            response = requests.post(url, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
-            self.access_token = data['access_token']
+            # Use user OAuth token if provided, otherwise fall back to client credentials
+            if self.oauth_token:
+                # Use provided user OAuth token
+                self.access_token = self.oauth_token
+                logger.info("Using provided OAuth token")
+            else:
+                # Fall back to client credentials (limited permissions)
+                url = "https://id.twitch.tv/oauth2/token"
+                params = {
+                    'client_id': self.client_id,
+                    'client_secret': self.client_secret,
+                    'grant_type': 'client_credentials'
+                }
+                
+                response = requests.post(url, params=params)
+                response.raise_for_status()
+                
+                data = response.json()
+                self.access_token = data['access_token']
+                logger.info("Using client credentials (limited clip permissions)")
             
             self.headers = {
                 'Authorization': f'Bearer {self.access_token}',
@@ -80,14 +88,20 @@ class TwitchClipBot:
     def get_stream_data(self) -> Optional[Dict]:
         """Get current stream data including viewer count"""
         try:
-            url = f"https://api.twitch.tv/helix/streams?user_id={self.broadcaster_id}"
+            # Add cache-busting parameter to get fresh data
+            import time
+            url = f"https://api.twitch.tv/helix/streams?user_id={self.broadcaster_id}&_t={int(time.time())}"
             response = requests.get(url, headers=self.headers)
             response.raise_for_status()
             
             data = response.json()
             if data['data']:
                 stream_info = data['data'][0]
-                logger.debug(f"Stream data: {stream_info['viewer_count']} viewers, {stream_info['game_name']}")
+                # Log more details about the stream data
+                viewer_count = stream_info['viewer_count']
+                game_name = stream_info.get('game_name', 'Unknown')
+                started_at = stream_info.get('started_at', 'Unknown')
+                logger.debug(f"Fresh stream data: {viewer_count} viewers, {game_name}, started: {started_at}")
                 return stream_info
             else:
                 logger.info("Stream is offline")
@@ -219,6 +233,9 @@ class TwitchClipBot:
         except requests.RequestException as e:
             if e.response and e.response.status_code == 429:
                 logger.warning("Rate limited by Twitch API")
+            elif e.response and e.response.status_code == 401:
+                logger.error("❌ Unauthorized: Need user OAuth token with 'clips:edit' scope for clip creation")
+                logger.error("   Client credentials cannot create clips. You need to get a user OAuth token.")
             else:
                 logger.error(f"Failed to create clip: {e}")
         
@@ -329,6 +346,7 @@ def config():
         click.echo(f"   Client ID: {'✅ Set' if bot.client_id else '❌ Missing'}")
         click.echo(f"   Client Secret: {'✅ Set' if bot.client_secret else '❌ Missing'}")
         click.echo(f"   Broadcaster ID: {'✅ Set' if bot.broadcaster_id else '❌ Missing'}")
+        click.echo(f"   OAuth Token: {'✅ Set' if bot.oauth_token and bot.oauth_token != 'your_oauth_token_here' else '❌ Missing (needed for clips)'}")
         
         if all([bot.client_id, bot.client_secret, bot.broadcaster_id]):
             click.echo("\n🔑 Testing authentication...")
@@ -338,12 +356,52 @@ def config():
                     broadcaster_name = bot.get_broadcaster_name()
                     if broadcaster_name:
                         click.echo(f"✅ Authentication successful for: {broadcaster_name}")
+                        
+                        if not bot.oauth_token or bot.oauth_token == 'your_oauth_token_here':
+                            click.echo("\n⚠️  Note: You're using client credentials.")
+                            click.echo("   For clip creation, you need a user OAuth token with 'clips:edit' scope.")
+                            click.echo("   Run 'python twitch_clip_bot.py oauth-help' for instructions.")
                     else:
                         click.echo("⚠️  Authentication successful but couldn't get broadcaster name")
                 else:
                     click.echo("❌ Authentication failed")
             
             asyncio.run(test_auth())
+    
+    except ValueError as e:
+        click.echo(f"❌ Configuration error: {e}")
+
+
+@cli.command()
+@click.option('--generate-url', is_flag=True, help='Generate OAuth URL for token')
+def oauth_help(generate_url):
+    """Help with getting OAuth token for clip creation"""
+    try:
+        bot = TwitchClipBot()
+        
+        if generate_url:
+            # Generate OAuth URL
+            oauth_url = (
+                f"https://id.twitch.tv/oauth2/authorize"
+                f"?client_id={bot.client_id}"
+                f"&redirect_uri=http://localhost:8080"
+                f"&response_type=token"
+                f"&scope=clips:edit"
+            )
+            click.echo("🔗 OAuth URL generated:")
+            click.echo(f"   {oauth_url}")
+            click.echo("\n📝 Instructions:")
+            click.echo("1. Open this URL in your browser")
+            click.echo("2. Authorize the application")
+            click.echo("3. Copy the 'access_token' from the redirect URL")
+            click.echo("4. Add it to your .env file as TWITCH_OAUTH_TOKEN=your_token_here")
+        else:
+            click.echo("🎯 To create clips, you need a user OAuth token with 'clips:edit' scope.")
+            click.echo("\n📚 Two options:")
+            click.echo("1. Run: python twitch_clip_bot.py oauth-help --generate-url")
+            click.echo("2. Use a tool like https://twitchtokengenerator.com/ with 'clips:edit' scope")
+            click.echo("\n⚙️  Once you have the token, add it to your .env file:")
+            click.echo("   TWITCH_OAUTH_TOKEN=your_actual_token_here")
     
     except ValueError as e:
         click.echo(f"❌ Configuration error: {e}")
