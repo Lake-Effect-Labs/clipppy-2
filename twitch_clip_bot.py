@@ -17,6 +17,13 @@ import requests
 import websockets
 from dotenv import load_dotenv
 
+# Import clip enhancer
+try:
+    from clip_enhancer import ClipEnhancer, check_dependencies
+except ImportError:
+    ClipEnhancer = None
+    check_dependencies = None
+
 # Load environment variables
 load_dotenv()
 
@@ -47,6 +54,10 @@ class TwitchClipBot:
         self.viewer_history = deque(maxlen=60)   # Store viewer counts for last 60 checks
         self.last_clip_time = 0
         self.clip_cooldown = 60  # Minimum seconds between clips
+        
+        # Clip enhancement
+        self.enhancer = ClipEnhancer() if ClipEnhancer else None
+        self.auto_enhance = os.getenv('AUTO_ENHANCE_CLIPS', 'false').lower() == 'true'
         
     async def authenticate(self) -> bool:
         """Get OAuth access token from Twitch API"""
@@ -228,6 +239,20 @@ class TwitchClipBot:
                 if reason:
                     logger.info(f"   Reason: {reason}")
                 
+                # Auto-enhance clip if enabled
+                if self.auto_enhance and self.enhancer:
+                    logger.info("🎨 Auto-enhancing clip...")
+                    use_captions = os.getenv('USE_CAPTIONS', 'true').lower() == 'true'
+                    enhanced_result = self.enhancer.auto_enhance_clip(clip_url, reason, use_captions=use_captions)
+                    if enhanced_result:
+                        logger.info(f"✨ Enhanced clip saved: {enhanced_result['enhanced_path']}")
+                        if enhanced_result.get('has_captions'):
+                            logger.info("   Features: Animated captions with speech-to-text")
+                        if enhanced_result.get('text_overlay'):
+                            logger.info(f"   Text: {enhanced_result['text_overlay']}")
+                        if enhanced_result.get('sound_effect'):
+                            logger.info(f"   Sound: {enhanced_result['sound_effect']}")
+                
                 return clip_url
             
         except requests.RequestException as e:
@@ -405,6 +430,139 @@ def oauth_help(generate_url):
     
     except ValueError as e:
         click.echo(f"❌ Configuration error: {e}")
+
+
+@cli.command()
+@click.argument('clip_url')
+@click.option('--text', help='Custom text overlay')
+@click.option('--sound', help='Sound effect (airhorn, wow, epic, sus)')
+@click.option('--position', default='center', help='Text position (center, top, bottom)')
+@click.option('--no-captions', is_flag=True, help='Disable animated captions')
+@click.option('--vertical', is_flag=True, help='Convert to vertical TikTok format')
+def enhance(clip_url, text, sound, position, no_captions, vertical):
+    """Enhance a Twitch clip with AI text and sound effects"""
+    try:
+        if not ClipEnhancer:
+            click.echo("❌ Clip enhancement not available. Install dependencies:")
+            click.echo("   pip install moviepy yt-dlp")
+            if not check_dependencies():
+                return
+        
+        enhancer = ClipEnhancer()
+        
+        click.echo(f"🎬 Enhancing clip: {clip_url}")
+        
+        # Auto-enhance or manual enhance
+        if not text and not sound:
+            # Auto-enhance
+            result = enhancer.auto_enhance_clip(clip_url, "manual enhancement", use_captions=not no_captions)
+        else:
+            # Manual enhance
+            video_path = enhancer.download_clip(clip_url)
+            if not video_path:
+                click.echo("❌ Failed to download clip")
+                return
+            
+            if not text:
+                text = enhancer.generate_viral_text("manual enhancement")
+            
+            enhanced_path = enhancer.enhance_clip(
+                video_path,
+                text_overlay=text,
+                sound_effect=sound,
+                text_position=position,
+                use_captions=not no_captions,
+                vertical_format=vertical
+            )
+            
+            result = {
+                'enhanced_path': enhanced_path,
+                'text_overlay': text,
+                'sound_effect': sound,
+                'has_captions': not no_captions
+            } if enhanced_path else None
+        
+        if result:
+            click.echo(f"✨ Enhanced clip saved: {result['enhanced_path']}")
+            if result.get('has_captions'):
+                click.echo("   Features: Animated captions")
+            if result.get('text_overlay'):
+                click.echo(f"   Text: {result['text_overlay']}")
+            if result.get('sound_effect'):
+                click.echo(f"   Sound: {result['sound_effect']}")
+        else:
+            click.echo("❌ Enhancement failed")
+            
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+@click.argument('clip_url')
+@click.option('--horizontal', is_flag=True, help='Keep original aspect ratio (default: vertical)')
+def caption(clip_url, horizontal):
+    """Create MrBeast-style animated captions for a Twitch clip"""
+    try:
+        if not ClipEnhancer:
+            click.echo("❌ Clip enhancement not available. Install dependencies:")
+            click.echo("   pip install moviepy yt-dlp openai-whisper")
+            if not check_dependencies():
+                return
+        
+        enhancer = ClipEnhancer()
+        
+        click.echo(f"🎭 Creating captioned clip: {clip_url}")
+        click.echo("   This may take a few minutes for transcription...")
+        
+        result = enhancer.create_captioned_clip(clip_url, vertical=not horizontal)
+        
+        if result:
+            click.echo(f"✨ Captioned clip created: {result['enhanced_path']}")
+            click.echo(f"   Format: {result['format']}")
+            click.echo(f"   Style: {result['style']} (animated captions)")
+            click.echo("   Features: Speech-to-text, viral text highlighting, bounce animations")
+        else:
+            click.echo("❌ Caption creation failed")
+            
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+def setup_enhancement():
+    """Setup clip enhancement dependencies and check configuration"""
+    click.echo("🔧 Setting up clip enhancement...")
+    
+    # Check dependencies
+    if check_dependencies and check_dependencies():
+        click.echo("✅ All dependencies installed")
+    else:
+        click.echo("❌ Missing dependencies. Install with:")
+        click.echo("   pip install moviepy yt-dlp")
+        if os.getenv('OPENAI_API_KEY'):
+            click.echo("   pip install openai  # Optional for AI text generation")
+    
+    # Check OpenAI API key
+    if os.getenv('OPENAI_API_KEY'):
+        click.echo("✅ OpenAI API key configured")
+    else:
+        click.echo("⚠️  No OpenAI API key found (optional)")
+        click.echo("   Add OPENAI_API_KEY=your_key to .env for AI text generation")
+    
+    # Test enhancement
+    click.echo("\n🧪 Testing enhancement capabilities...")
+    try:
+        enhancer = ClipEnhancer()
+        test_text = enhancer.generate_viral_text("test")
+        click.echo(f"✅ Text generation: {test_text}")
+        
+        click.echo("✅ Clip enhancement ready!")
+        click.echo("\n📚 Usage:")
+        click.echo("   python twitch_clip_bot.py enhance <clip_url>")
+        click.echo("   python twitch_clip_bot.py enhance <clip_url> --text 'CUSTOM TEXT' --sound airhorn")
+        
+    except Exception as e:
+        click.echo(f"❌ Enhancement test failed: {e}")
 
 
 if __name__ == "__main__":

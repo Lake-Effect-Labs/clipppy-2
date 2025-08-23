@@ -48,3 +48,21 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Video files and clips
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.flv
+
+# Audio files
+*.wav
+*.mp3
+*.aac
+*.m4a
+
+# Clip enhancement temp directory
+temp/
+clips/

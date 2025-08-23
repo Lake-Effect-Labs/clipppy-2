@@ -1,0 +1,15 @@
+# Streamers.yaml
+# This file contains the list of streamers to monitor for clips
+# Each streamer has a name, twitch_id, and tiktok_account
+# The twitch_id is the ID of the streamer on Twitch
+# this will start up each instance of the bot for each streamer
+# the bot will then monitor the streamer's chat and create clips when the streamer is live
+# the clips will be posted to the streamer's clipppy TikTok account
+# the env file will contain the API keys for the streamers / tiktok accounts
+streamers:
+  - name: Jynxzi
+    twitch_id: 12345
+    tiktok_account: jynxzi.clippy
+  - name: KaiCenat
+    twitch_id: 67890
+    tiktok_account: kai.clippy

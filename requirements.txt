@@ -2,3 +2,11 @@ requests>=2.28.0
 websockets>=11.0.0
 click>=8.0.0
 python-dotenv>=1.0.0
+
+# Video processing (optional)
+moviepy>=1.0.3
+yt-dlp>=2023.1.6
+
+# AI features (optional)
+openai>=1.0.0
+openai-whisper>=20231117
