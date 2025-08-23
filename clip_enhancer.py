@@ -76,7 +76,10 @@ class CaptionPhrase:
 class ClipEnhancer:
     def __init__(self):
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
-        self.temp_dir = Path(tempfile.gettempdir()) / "twitch_clips"
+        # Use local clips folder instead of system temp
+        self.clips_dir = Path(__file__).parent / "clips"
+        self.temp_dir = self.clips_dir / "temp"
+        self.clips_dir.mkdir(exist_ok=True)
         self.temp_dir.mkdir(exist_ok=True)
         
         # Sound effects library (you can add more)
@@ -344,33 +347,46 @@ class ClipEnhancer:
                     primary_color = word.color
                     break
             
-            # Make text bigger and more viral for emphasized phrases
-            font_size = 90 if has_emphasis else 70
+            # Professional TikTok-style font sizes
+            font_size = 72 if has_emphasis else 56  # Clean, readable sizes
             duration = phrase.end_time - phrase.start_time
+            
+            # Ensure minimum duration for visibility (captions might be too short!)
+            min_duration = 1.0  # At least 1 second
+            if duration < min_duration:
+                duration = min_duration
+                logger.info(f"⏰ Extended caption duration from {phrase.end_time - phrase.start_time:.1f}s to {duration}s")
             
             # Add visual indicators for viral moments
             display_text = phrase.text
             if has_emphasis:
                 display_text = f"🔥 {phrase.text.upper()} 🔥"
             
-            # Create text clip with viral styling
+            # Create PROFESSIONAL viral text clip
             text_clip = TextClip(
                 text=display_text,
                 font_size=font_size,
-                color=primary_color,
+                color='white',  # Always white for best contrast
                 stroke_color='black',
-                stroke_width=4,  # Thicker outline for readability
-                duration=duration,
-                size=video_size
+                stroke_width=3,  # Clean outline
+                duration=duration
             )
             
-            # Position at bottom center - use safe positioning like the working test
-            y_position = video_size[1] - 120  # Closer to bottom but still visible
-            logger.info(f"🎯 Positioning caption at y={y_position} (video height: {video_size[1]})")
+            # Skip glow effect for performance - just use thicker stroke for emphasis
+            if has_emphasis:
+                logger.info(f"🔥 Using viral styling for emphasized caption")
             
-            # Simplified positioning - just like the working test
+            # Better positioning for TikTok format - center in bottom third
+            if video_size[1] > 1800:  # Vertical TikTok format
+                # Position in the bottom third, but not too close to bottom
+                bottom_third_start = video_size[1] * 2 // 3
+                y_position = bottom_third_start + 100  # Center of bottom third
+            else:
+                y_position = video_size[1] - 80  # Closer to bottom for landscape
+            
             text_clip = text_clip.with_position(('center', y_position))
-            logger.info(f"✅ Caption positioned at center, {y_position}px from top")
+            
+            logger.info(f"✅ Caption created: '{display_text}' at y={y_position}, duration={duration:.1f}s")
             
             # Set timing
             text_clip = text_clip.with_start(phrase.start_time)
@@ -396,15 +412,9 @@ class ClipEnhancer:
                 # Already close to vertical
                 return video
             
-            # Calculate new dimensions
-            if current_ratio > target_ratio:
-                # Video is too wide - need to add top/bottom padding
-                new_h = int(original_w / target_ratio)
-                new_w = original_w
-            else:
-                # Video is too tall - need to add side padding
-                new_w = int(original_h * target_ratio)
-                new_h = original_h
+            # Use STANDARD TikTok dimensions instead of calculated ones
+            new_w = 1080  # Standard TikTok width
+            new_h = 1920  # Standard TikTok height (9:16 ratio)
             
             # Create blurred background
             try:
