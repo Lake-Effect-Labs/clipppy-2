@@ -1,8 +1,12 @@
 # Environment and configuration
 .env
+.env.*
 env/
 venv/
 config/local_config.yaml
+
+# Sensitive config files
+config/config_local.yaml
 
 # Python
 __pycache__/

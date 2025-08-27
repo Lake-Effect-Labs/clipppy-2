@@ -18,16 +18,23 @@ import click
 import requests
 import websockets
 import yaml
+import os
+from dotenv import load_dotenv
+
+# Load environment variables for sensitive credentials
+load_dotenv()
 
 # Import our enhanced modules
 try:
     from src.clip_enhancer import ClipEnhancer, check_dependencies
     from services.tiktok_uploader import TikTokUploader
+    from src.viral_detector import ViralDetector
 except ImportError as e:
     print(f"⚠️ Import error: {e}")
     ClipEnhancer = None
     check_dependencies = None
     TikTokUploader = None
+    ViralDetector = None
 
 # Configure logging
 logging.basicConfig(
@@ -47,15 +54,15 @@ class TwitchClipBot:
         # Initialize components
         self.tiktok_uploader = TikTokUploader(config_path) if TikTokUploader else None
         self.clip_enhancer = ClipEnhancer() if ClipEnhancer else None
+        self.viral_detector = ViralDetector(self.config) if ViralDetector else None
         
-        # Twitch API setup from config
-        twitch_config = self.config.get('twitch', {})
-        self.client_id = twitch_config.get('client_id')
-        self.client_secret = twitch_config.get('client_secret')
-        self.oauth_token = twitch_config.get('oauth_token')
+        # Twitch API setup from environment variables (for security)
+        self.client_id = os.getenv('TWITCH_CLIENT_ID')
+        self.client_secret = os.getenv('TWITCH_CLIENT_SECRET')
+        self.oauth_token = os.getenv('TWITCH_OAUTH_TOKEN')
         
         if not all([self.client_id, self.client_secret]):
-            raise ValueError("Missing Twitch credentials in config.yaml")
+            raise ValueError("Missing Twitch credentials in .env file")
         
         self.access_token = None
         self.headers = {}
@@ -94,6 +101,15 @@ class TwitchClipBot:
             if streamer.get('name') == streamer_name:
                 return streamer
         return None
+    
+    def set_current_streamer(self, streamer_config: Dict):
+        """Set the current streamer and initialize viral detector"""
+        self.current_streamer = streamer_config
+        
+        # Initialize viral detector for this streamer if using advanced algorithm
+        if self.viral_detector and self.config.get('global', {}).get('use_test_virality_alg', False):
+            self.viral_detector.set_current_streamer(streamer_config)
+            self.viral_detector.set_stream_status(True)  # Assume we're starting monitoring because stream is live
         
     async def authenticate(self) -> bool:
         """Get OAuth access token from Twitch API"""
@@ -186,13 +202,21 @@ class TwitchClipBot:
                         current_time = time.time()
                         self.chat_messages.append(current_time)
                         
-                        # Parse username and message for logging
+                        # Parse username and message for logging and viral detector
                         try:
                             parts = message.split(":", 2)
                             if len(parts) >= 3:
                                 user_info = parts[1].split("!")[0]
                                 chat_message = parts[2].strip()
                                 logger.debug(f"Chat: {user_info}: {chat_message}")
+                                
+                                # Feed to viral detector if using advanced algorithm
+                                if self.viral_detector and self.config.get('global', {}).get('use_test_virality_alg', False):
+                                    self.viral_detector.add_chat_message(
+                                        username=user_info,
+                                        user_id=user_info,  # IRC doesn't provide user_id
+                                        message=chat_message
+                                    )
                         except:
                             pass
                             
@@ -246,15 +270,49 @@ class TwitchClipBot:
     
     def detect_spikes(self) -> Tuple[bool, str]:
         """Detect if metrics indicate a clip-worthy moment"""
+        if not self.current_streamer:
+            return False, "No current streamer configured"
+        
+        # Check if using advanced viral detection algorithm
+        use_viral_alg = self.config.get('global', {}).get('use_test_virality_alg', False)
+        
+        if use_viral_alg and self.viral_detector:
+            # Use advanced viral detection algorithm
+            should_clip, reason, breakdown = self.viral_detector.should_create_clip()
+            
+            if should_clip:
+                # Log detailed breakdown for analysis
+                logger.info(f"🔥 Viral algorithm breakdown:")
+                logger.info(f"   Total score: {breakdown.get('total_score', 0):.3f}")
+                logger.info(f"   Chat component: {breakdown.get('chat_component', 0):.3f} (MPS: {breakdown.get('current_mps', 0):.1f})")
+                logger.info(f"   Viewer component: {breakdown.get('viewer_component', 0):.3f} (Delta: {breakdown.get('viewer_delta_percent', 0):.1f}%)")
+                logger.info(f"   Engagement component: {breakdown.get('engagement_component', 0):.3f}")
+                logger.info(f"   Follow component: {breakdown.get('follow_component', 0):.3f}")
+            
+            return should_clip, reason
+        else:
+            # Use legacy threshold-based detection
+            return self._detect_spikes_legacy()
+    
+    def _detect_spikes_legacy(self) -> Tuple[bool, str]:
+        """Legacy threshold-based spike detection"""
+        # Get thresholds from current streamer config or global defaults
+        default_thresholds = self.config.get('global', {}).get('default_thresholds', {})
+        streamer_thresholds = self.current_streamer.get('thresholds', {})
+        
+        chat_threshold = streamer_thresholds.get('chat_spike', default_thresholds.get('chat_spike', 30))
+        viewer_threshold = streamer_thresholds.get('viewer_increase', default_thresholds.get('viewer_increase', 20))
+        time_window = streamer_thresholds.get('time_window', default_thresholds.get('time_window', 10))
+        
         # Check chat activity spike
-        chat_mps = self.calculate_chat_mps(10)
-        if chat_mps > 30:
-            return True, f"Chat spike detected: {chat_mps:.1f} messages/second"
+        chat_mps = self.calculate_chat_mps(time_window)
+        if chat_mps > chat_threshold:
+            return True, f"Chat spike detected: {chat_mps:.1f} messages/second (threshold: {chat_threshold})"
         
         # Check viewer count spike
         viewer_change, current_viewers = self.calculate_viewer_change()
-        if viewer_change > 20:
-            return True, f"Viewer spike detected: +{viewer_change:.1f}% ({current_viewers} viewers)"
+        if viewer_change > viewer_threshold:
+            return True, f"Viewer spike detected: +{viewer_change:.1f}% ({current_viewers} viewers, threshold: {viewer_threshold}%)"
         
         return False, ""
     
@@ -345,6 +403,10 @@ class TwitchClipBot:
                 # Record viewer count
                 viewer_count = stream_data['viewer_count']
                 self.viewer_history.append(viewer_count)
+                
+                # Feed viewer data to viral detector if using advanced algorithm
+                if self.viral_detector and self.config.get('global', {}).get('use_test_virality_alg', False):
+                    self.viral_detector.add_viewer_data(viewer_count)
                 
                 # Check for spikes
                 should_clip, reason = self.detect_spikes()
@@ -443,7 +505,7 @@ def config():
         click.echo("🔧 Configuration Status:")
         click.echo(f"   Twitch Client ID: {'✅ Set' if bot.client_id else '❌ Missing'}")
         click.echo(f"   Twitch Client Secret: {'✅ Set' if bot.client_secret else '❌ Missing'}")
-        click.echo(f"   Twitch OAuth Token: {'✅ Set' if bot.oauth_token and bot.oauth_token != 'your_twitch_oauth_token' else '❌ Missing (needed for clips)'}")
+        click.echo(f"   Twitch OAuth Token: {'✅ Set' if bot.oauth_token else '❌ Missing (needed for clips)'}")
         
         # Show streamers
         enabled_streamers = bot.get_enabled_streamers()
@@ -485,10 +547,11 @@ def config():
                     else:
                         click.echo("   ⚠️  No enabled streamers to test")
                     
-                    if not bot.oauth_token or bot.oauth_token == 'your_twitch_oauth_token':
+                    if not bot.oauth_token:
                         click.echo("\n⚠️  Note: You're using client credentials.")
                         click.echo("   For clip creation, you need a user OAuth token.")
-                        click.echo("   Run: python twitch_clip_bot.py oauth-help --generate-url")
+                        click.echo("   Run: python clipppy.py oauth-help --generate-url")
+                        click.echo("   Then add TWITCH_OAUTH_TOKEN=your_token to .env file")
                 else:
                     click.echo("   ❌ Authentication failed")
             
@@ -524,7 +587,7 @@ def oauth_help(generate_url):
         else:
             click.echo("🎯 To create clips, you need a user OAuth token with 'clips:edit' scope.")
             click.echo("\n📚 Two options:")
-            click.echo("1. Run: python twitch_clip_bot.py oauth-help --generate-url")
+            click.echo("1. Run: python clipppy.py oauth-help --generate-url")
             click.echo("2. Use a tool like https://twitchtokengenerator.com/ with 'clips:edit' scope")
             click.echo("\n⚙️  Once you have the token, add it to your .env file:")
             click.echo("   TWITCH_OAUTH_TOKEN=your_actual_token_here")
@@ -808,6 +871,125 @@ def stats(days):
         
     except Exception as e:
         click.echo(f"❌ Enhancement test failed: {e}")
+
+
+@cli.command()
+@click.argument('streamer_name')
+@click.option('--chat-spike', type=float, help='Messages per second threshold')
+@click.option('--viewer-increase', type=float, help='Viewer percentage increase threshold')
+@click.option('--time-window', type=int, help='Time window in seconds for chat analysis')
+def set_thresholds(streamer_name, chat_spike, viewer_increase, time_window):
+    """Set detection thresholds for a specific streamer"""
+    try:
+        config_path = Path("config/config.yaml")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Find streamer
+        streamer_found = False
+        for streamer in config.get('streamers', []):
+            if streamer.get('name') == streamer_name:
+                if 'thresholds' not in streamer:
+                    streamer['thresholds'] = {}
+                
+                # Update thresholds
+                if chat_spike is not None:
+                    streamer['thresholds']['chat_spike'] = chat_spike
+                    click.echo(f"✅ Set chat spike threshold to {chat_spike} msgs/sec")
+                
+                if viewer_increase is not None:
+                    streamer['thresholds']['viewer_increase'] = viewer_increase
+                    click.echo(f"✅ Set viewer increase threshold to {viewer_increase}%")
+                
+                if time_window is not None:
+                    streamer['thresholds']['time_window'] = time_window
+                    click.echo(f"✅ Set time window to {time_window} seconds")
+                
+                streamer_found = True
+                break
+        
+        if not streamer_found:
+            click.echo(f"❌ Streamer '{streamer_name}' not found")
+            return
+        
+        # Save updated config
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        
+        # Show current thresholds
+        updated_streamer = next(s for s in config['streamers'] if s['name'] == streamer_name)
+        thresholds = updated_streamer.get('thresholds', {})
+        
+        click.echo(f"\n🔧 Current thresholds for {streamer_name}:")
+        click.echo(f"   Chat spike: {thresholds.get('chat_spike', 'using global default')} msgs/sec")
+        click.echo(f"   Viewer increase: {thresholds.get('viewer_increase', 'using global default')}%")
+        click.echo(f"   Time window: {thresholds.get('time_window', 'using global default')} seconds")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+@click.option('--enable/--disable', default=True, help='Enable or disable viral algorithm')
+@click.option('--score', type=float, help='Set viral score threshold (0.0-2.0+)')
+def toggle_viral_algorithm(enable, score):
+    """Toggle the advanced viral detection algorithm"""
+    try:
+        config_path = Path("config/config.yaml")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Update algorithm setting
+        if 'global' not in config:
+            config['global'] = {}
+        
+        config['global']['use_test_virality_alg'] = enable
+        
+        if score is not None:
+            if 'viral_algorithm' not in config['global']:
+                config['global']['viral_algorithm'] = {}
+            config['global']['viral_algorithm']['score_threshold'] = score
+        
+        # Save updated config
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        
+        status = "enabled" if enable else "disabled"
+        click.echo(f"✅ Viral detection algorithm {status}")
+        
+        if score is not None:
+            click.echo(f"✅ Viral score threshold set to {score}")
+        
+        # Show current algorithm settings
+        alg_config = config['global'].get('viral_algorithm', {})
+        click.echo(f"\n🎯 Current Settings:")
+        click.echo(f"   Algorithm: {'Advanced Viral Detection' if enable else 'Legacy Thresholds'}")
+        click.echo(f"   Score threshold: {alg_config.get('score_threshold', 1.0)}")
+        click.echo(f"   Min unique chatters: {alg_config.get('min_unique_chatters', 30)}")
+        click.echo(f"   Cooldown: {alg_config.get('cooldown_seconds', 120)}s")
+        
+        weights = alg_config.get('weights', {})
+        click.echo(f"   Weights: Chat {weights.get('chat_velocity', 0.4):.0%}, "
+                  f"Viewers {weights.get('viewer_delta', 0.3):.0%}, "
+                  f"Events {weights.get('engagement_events', 0.2):.0%}, "
+                  f"Follows {weights.get('follow_rate', 0.1):.0%}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+def test_viral_algorithm():
+    """Test the viral detection algorithm"""
+    try:
+        # Import and run the test
+        from src.viral_detector import test_viral_detector
+        test_viral_detector()
+        
+    except ImportError:
+        click.echo("❌ Viral detector not available")
+    except Exception as e:
+        click.echo(f"❌ Test failed: {e}")
 
 
 if __name__ == "__main__":
