@@ -1,1 +1,0 @@
-# Clipppy Services Package

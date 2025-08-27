@@ -40,11 +40,10 @@ python clipppy.py dashboard
 clipppy-2/
 ├── 🎬 clipppy.py                    # Main entry point
 ├── 🎯 twitch_clip_bot.py           # Core CLI application
-├── 📂 src/                         # Core source code
-│   └── clip_enhancer.py            # Video enhancement & captions
-├── 📂 services/                    # Background services
-│   ├── tiktok_uploader.py          # Upload queue & rate limiting
-│   └── dashboard.py                # Web monitoring interface
+├── 🎨 clip_enhancer.py             # Video enhancement & captions
+├── 🧠 viral_detector.py            # Advanced viral detection
+├── 📱 tiktok_uploader.py           # Upload queue & rate limiting
+├── 📊 dashboard.py                 # Web monitoring interface
 ├── 📂 config/                      # Configuration files
 │   └── config.yaml                 # Main system configuration
 ├── 📂 docs/                        # Documentation

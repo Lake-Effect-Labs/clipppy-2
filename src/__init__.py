@@ -1,1 +1,0 @@
-# Clipppy Source Code Package

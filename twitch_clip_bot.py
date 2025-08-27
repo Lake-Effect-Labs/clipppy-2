@@ -26,9 +26,9 @@ load_dotenv()
 
 # Import our enhanced modules
 try:
-    from src.clip_enhancer import ClipEnhancer, check_dependencies
-    from services.tiktok_uploader import TikTokUploader
-    from src.viral_detector import ViralDetector
+    from clip_enhancer import ClipEnhancer, check_dependencies
+    from tiktok_uploader import TikTokUploader
+    from viral_detector import ViralDetector
 except ImportError as e:
     print(f"⚠️ Import error: {e}")
     ClipEnhancer = None
@@ -709,7 +709,7 @@ def setup_enhancement():
 def dashboard():
     """Start the web dashboard for monitoring performance"""
     try:
-        from services.dashboard import ClippyDashboard
+        from dashboard import ClippyDashboard
         dashboard = ClippyDashboard()
         dashboard.run()
     except ImportError:
@@ -983,7 +983,7 @@ def test_viral_algorithm():
     """Test the viral detection algorithm"""
     try:
         # Import and run the test
-        from src.viral_detector import test_viral_detector
+        from viral_detector import test_viral_detector
         test_viral_detector()
         
     except ImportError:
