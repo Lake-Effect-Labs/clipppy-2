@@ -1,0 +1,166 @@
+# Clipppy Phase 1 Configuration
+# =============================
+
+# Twitch API Credentials
+twitch:
+  client_id: "your_twitch_client_id"
+  client_secret: "your_twitch_client_secret"
+  oauth_token: "your_twitch_oauth_token"
+
+# TikTok API Credentials (for future implementation)
+tiktok:
+  api_key: "your_tiktok_api_key"
+  api_secret: "your_tiktok_api_secret"
+  access_token: "your_tiktok_access_token"
+
+# Global Settings
+global:
+  max_clips_per_day: 5
+  monitoring_interval: 30  # seconds
+  cleanup_temp_files: true
+  
+# Streamers Configuration
+streamers:
+  - name: "jynxzi"
+    twitch_username: "jynxzi"
+    broadcaster_id: "85018793"
+    enabled: true
+    
+    # Detection Thresholds
+    thresholds:
+      chat_spike: 30      # messages per second
+      viewer_increase: 20  # percentage increase
+      time_window: 10     # seconds
+    
+    # TikTok Account Settings
+    tiktok_account:
+      username: "jynxzi_clippy"
+      max_posts_per_day: 3
+      posting_hours:
+        start: 14  # 2 PM
+        end: 22    # 10 PM
+      hashtags:
+        - "#jynxzi"
+        - "#rainbowsix"
+        - "#gaming"
+        - "#viral"
+        - "#fyp"
+    
+    # Video Enhancement Settings
+    enhancement:
+      style: "mrbeast"           # Options: mrbeast, minimal, gaming, viral
+      vertical_format: true
+      add_captions: true
+      add_emojis: true
+      add_sound_effects: false
+      
+      # Caption Settings
+      captions:
+        font_size: 60
+        emphasis_size: 76
+        font_color: "white"
+        emphasis_color: "yellow"
+        stroke_width: 3
+        position: "bottom"
+        viral_words: ["INSANE", "CLUTCH", "NO WAY", "POGGERS", "WTF", "OMG"]
+      
+      # Audio Enhancement
+      audio:
+        boost_volume: 1.2
+        normalize: true
+        add_intro_sound: false
+        add_outro_sound: false
+
+  - name: "shroud"
+    twitch_username: "shroud"
+    broadcaster_id: "37402112"
+    enabled: false
+    
+    thresholds:
+      chat_spike: 25
+      viewer_increase: 15
+      time_window: 15
+    
+    tiktok_account:
+      username: "shroud_clippy"
+      max_posts_per_day: 4
+      posting_hours:
+        start: 16
+        end: 23
+      hashtags:
+        - "#shroud"
+        - "#fps"
+        - "#gaming"
+        - "#pro"
+        - "#viral"
+    
+    enhancement:
+      style: "minimal"
+      vertical_format: true
+      add_captions: true
+      add_emojis: false
+      add_sound_effects: false
+      
+      captions:
+        font_size: 55
+        emphasis_size: 70
+        font_color: "white"
+        emphasis_color: "red"
+        stroke_width: 2
+        position: "bottom"
+        viral_words: ["INSANE", "HEADSHOT", "ACE", "CLEAN", "PERFECT"]
+
+# Enhancement Styles Library
+enhancement_styles:
+  mrbeast:
+    description: "MrBeast-style viral captions with heavy emphasis"
+    font_family: "Arial Bold"
+    large_text: true
+    heavy_emphasis: true
+    emoji_frequency: "high"
+    animation_style: "bounce"
+    
+  minimal:
+    description: "Clean, minimal captions for professional content"
+    font_family: "Arial"
+    large_text: false
+    heavy_emphasis: false
+    emoji_frequency: "low"
+    animation_style: "fade"
+    
+  gaming:
+    description: "Gaming-focused style with relevant terminology"
+    font_family: "Impact"
+    large_text: true
+    heavy_emphasis: true
+    emoji_frequency: "medium"
+    animation_style: "scale"
+    
+  viral:
+    description: "Maximum viral potential with all effects"
+    font_family: "Arial Black"
+    large_text: true
+    heavy_emphasis: true
+    emoji_frequency: "high"
+    animation_style: "bounce"
+    sound_effects: true
+
+# Dashboard Settings
+dashboard:
+  enabled: true
+  port: 8080
+  host: "localhost"
+  update_interval: 60  # seconds
+  
+  # Analytics
+  analytics:
+    track_views: true
+    track_engagement: true
+    store_history_days: 30
+    
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/clipppy.log"
+  max_size_mb: 10
+  backup_count: 5

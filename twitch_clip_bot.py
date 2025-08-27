@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Twitch Clip Bot - Automatically creates clips when metrics spike
+Twitch Clip Bot - Phase 1 Complete System
+Automatically creates clips when metrics spike and uploads to TikTok
 """
 
 import asyncio
@@ -10,22 +11,23 @@ import os
 import time
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
+from pathlib import Path
 
 import click
 import requests
 import websockets
-from dotenv import load_dotenv
+import yaml
 
-# Import clip enhancer
+# Import our enhanced modules
 try:
     from clip_enhancer import ClipEnhancer, check_dependencies
-except ImportError:
+    from tiktok_uploader import TikTokUploader
+except ImportError as e:
+    print(f"⚠️ Import error: {e}")
     ClipEnhancer = None
     check_dependencies = None
-
-# Load environment variables
-load_dotenv()
+    TikTokUploader = None
 
 # Configure logging
 logging.basicConfig(
@@ -37,14 +39,23 @@ logger = logging.getLogger(__name__)
 
 
 class TwitchClipBot:
-    def __init__(self):
-        self.client_id = os.getenv('TWITCH_CLIENT_ID')
-        self.client_secret = os.getenv('TWITCH_CLIENT_SECRET')
-        self.broadcaster_id = os.getenv('TWITCH_BROADCASTER_ID')
-        self.oauth_token = os.getenv('TWITCH_OAUTH_TOKEN')
+    def __init__(self, config_path: str = "config.yaml"):
+        """Initialize bot with YAML configuration"""
+        self.config_path = Path(config_path)
+        self.load_config()
         
-        if not all([self.client_id, self.client_secret, self.broadcaster_id]):
-            raise ValueError("Missing required environment variables. Check your .env file.")
+        # Initialize components
+        self.tiktok_uploader = TikTokUploader(config_path) if TikTokUploader else None
+        self.clip_enhancer = ClipEnhancer() if ClipEnhancer else None
+        
+        # Twitch API setup from config
+        twitch_config = self.config.get('twitch', {})
+        self.client_id = twitch_config.get('client_id')
+        self.client_secret = twitch_config.get('client_secret')
+        self.oauth_token = twitch_config.get('oauth_token')
+        
+        if not all([self.client_id, self.client_secret]):
+            raise ValueError("Missing Twitch credentials in config.yaml")
         
         self.access_token = None
         self.headers = {}
@@ -53,11 +64,36 @@ class TwitchClipBot:
         self.chat_messages = deque(maxlen=1000)  # Store recent chat messages with timestamps
         self.viewer_history = deque(maxlen=60)   # Store viewer counts for last 60 checks
         self.last_clip_time = 0
+        
+        # Current streamer being monitored
+        self.current_streamer = None
         self.clip_cooldown = 60  # Minimum seconds between clips
         
         # Clip enhancement
         self.enhancer = ClipEnhancer() if ClipEnhancer else None
-        self.auto_enhance = os.getenv('AUTO_ENHANCE_CLIPS', 'false').lower() == 'true'
+        self.auto_enhance = self.config.get('global', {}).get('auto_enhance', True)
+    
+    def load_config(self):
+        """Load configuration from YAML file"""
+        try:
+            with open(self.config_path, 'r') as f:
+                self.config = yaml.safe_load(f)
+            logger.info("✅ Configuration loaded successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to load config: {e}")
+            self.config = {}
+    
+    def get_enabled_streamers(self) -> List[Dict]:
+        """Get list of enabled streamers from config"""
+        streamers = self.config.get('streamers', [])
+        return [s for s in streamers if s.get('enabled', False)]
+    
+    def get_streamer_config(self, streamer_name: str) -> Optional[Dict]:
+        """Get configuration for a specific streamer"""
+        for streamer in self.config.get('streamers', []):
+            if streamer.get('name') == streamer_name:
+                return streamer
+        return None
         
     async def authenticate(self) -> bool:
         """Get OAuth access token from Twitch API"""
@@ -98,10 +134,15 @@ class TwitchClipBot:
     
     def get_stream_data(self) -> Optional[Dict]:
         """Get current stream data including viewer count"""
+        if not self.current_streamer:
+            logger.error("No current streamer set")
+            return None
+            
         try:
             # Add cache-busting parameter to get fresh data
             import time
-            url = f"https://api.twitch.tv/helix/streams?user_id={self.broadcaster_id}&_t={int(time.time())}"
+            broadcaster_id = self.current_streamer.get('broadcaster_id')
+            url = f"https://api.twitch.tv/helix/streams?user_id={broadcaster_id}&_t={int(time.time())}"
             response = requests.get(url, headers=self.headers)
             response.raise_for_status()
             
@@ -160,8 +201,12 @@ class TwitchClipBot:
     
     def get_broadcaster_name(self) -> Optional[str]:
         """Get broadcaster username from user ID"""
+        if not self.current_streamer:
+            return None
+            
         try:
-            url = f"https://api.twitch.tv/helix/users?id={self.broadcaster_id}"
+            broadcaster_id = self.current_streamer.get('broadcaster_id')
+            url = f"https://api.twitch.tv/helix/users?id={broadcaster_id}"
             response = requests.get(url, headers=self.headers)
             response.raise_for_status()
             
@@ -222,7 +267,12 @@ class TwitchClipBot:
                 logger.info(f"Clip creation on cooldown ({self.clip_cooldown}s)")
                 return None
             
-            url = f"https://api.twitch.tv/helix/clips?broadcaster_id={self.broadcaster_id}"
+            broadcaster_id = self.current_streamer.get('broadcaster_id') if self.current_streamer else None
+            if not broadcaster_id:
+                logger.error("No broadcaster ID available for clip creation")
+                return None
+                
+            url = f"https://api.twitch.tv/helix/clips?broadcaster_id={broadcaster_id}"
             response = requests.post(url, headers=self.headers)
             response.raise_for_status()
             
@@ -276,7 +326,8 @@ class TwitchClipBot:
             logger.error("Could not get broadcaster username")
             return
         
-        logger.info(f"Starting monitoring for {broadcaster_name} (ID: {self.broadcaster_id})")
+        broadcaster_id = self.current_streamer.get('broadcaster_id')
+        logger.info(f"Starting monitoring for {broadcaster_name} (ID: {broadcaster_id})")
         
         # Start chat monitoring in background
         chat_task = asyncio.create_task(self.monitor_chat(broadcaster_name))
@@ -325,14 +376,36 @@ def cli():
 
 
 @cli.command()
-def start():
-    """Start monitoring the broadcaster for clip opportunities"""
+@click.option('--streamer', help='Specific streamer to monitor (default: all enabled)')
+def start(streamer):
+    """Start monitoring streamers for clip opportunities"""
     try:
         bot = TwitchClipBot()
-        asyncio.run(bot.start_monitoring())
+        
+        if streamer:
+            # Monitor specific streamer
+            streamer_config = bot.get_streamer_config(streamer)
+            if not streamer_config:
+                click.echo(f"❌ Streamer '{streamer}' not found in config")
+                return
+            if not streamer_config.get('enabled', False):
+                click.echo(f"❌ Streamer '{streamer}' is disabled in config")
+                return
+            
+            asyncio.run(bot.start_monitoring_streamer(streamer_config))
+        else:
+            # Monitor all enabled streamers
+            enabled_streamers = bot.get_enabled_streamers()
+            if not enabled_streamers:
+                click.echo("❌ No enabled streamers found in config")
+                return
+            
+            click.echo(f"🚀 Starting monitoring for {len(enabled_streamers)} streamers...")
+            asyncio.run(bot.start_monitoring_all())
+            
     except ValueError as e:
         click.echo(f"❌ Configuration error: {e}")
-        click.echo("Please check your .env file has all required variables.")
+        click.echo("Please check your config.yaml file.")
     except Exception as e:
         click.echo(f"❌ Error: {e}")
 
@@ -368,28 +441,56 @@ def config():
     try:
         bot = TwitchClipBot()
         click.echo("🔧 Configuration Status:")
-        click.echo(f"   Client ID: {'✅ Set' if bot.client_id else '❌ Missing'}")
-        click.echo(f"   Client Secret: {'✅ Set' if bot.client_secret else '❌ Missing'}")
-        click.echo(f"   Broadcaster ID: {'✅ Set' if bot.broadcaster_id else '❌ Missing'}")
-        click.echo(f"   OAuth Token: {'✅ Set' if bot.oauth_token and bot.oauth_token != 'your_oauth_token_here' else '❌ Missing (needed for clips)'}")
+        click.echo(f"   Twitch Client ID: {'✅ Set' if bot.client_id else '❌ Missing'}")
+        click.echo(f"   Twitch Client Secret: {'✅ Set' if bot.client_secret else '❌ Missing'}")
+        click.echo(f"   Twitch OAuth Token: {'✅ Set' if bot.oauth_token and bot.oauth_token != 'your_twitch_oauth_token' else '❌ Missing (needed for clips)'}")
         
-        if all([bot.client_id, bot.client_secret, bot.broadcaster_id]):
+        # Show streamers
+        enabled_streamers = bot.get_enabled_streamers()
+        disabled_streamers = [s for s in bot.config.get('streamers', []) if not s.get('enabled', False)]
+        
+        click.echo(f"\n📺 Streamers:")
+        click.echo(f"   Enabled: {len(enabled_streamers)}")
+        for streamer in enabled_streamers:
+            tiktok_user = streamer.get('tiktok_account', {}).get('username', 'Not set')
+            click.echo(f"     🟢 {streamer['name']} → @{tiktok_user}")
+        
+        click.echo(f"   Disabled: {len(disabled_streamers)}")
+        for streamer in disabled_streamers:
+            click.echo(f"     🔴 {streamer['name']}")
+        
+        # Show TikTok status
+        click.echo(f"\n📱 TikTok Integration: {'✅ Ready' if bot.tiktok_uploader else '❌ Not available'}")
+        
+        # Show enhancement status
+        click.echo(f"🎬 Clip Enhancement: {'✅ Ready' if bot.clip_enhancer else '❌ Not available'}")
+        
+        if all([bot.client_id, bot.client_secret]):
             click.echo("\n🔑 Testing authentication...")
             
             async def test_auth():
                 if await bot.authenticate():
-                    broadcaster_name = bot.get_broadcaster_name()
-                    if broadcaster_name:
-                        click.echo(f"✅ Authentication successful for: {broadcaster_name}")
-                        
-                        if not bot.oauth_token or bot.oauth_token == 'your_oauth_token_here':
-                            click.echo("\n⚠️  Note: You're using client credentials.")
-                            click.echo("   For clip creation, you need a user OAuth token with 'clips:edit' scope.")
-                            click.echo("   Run 'python twitch_clip_bot.py oauth-help' for instructions.")
+                    click.echo("   ✅ Authentication successful")
+                    
+                    # Test with enabled streamers
+                    enabled_streamers = bot.get_enabled_streamers()
+                    if enabled_streamers:
+                        for streamer in enabled_streamers[:1]:  # Test first enabled streamer
+                            bot.current_streamer = streamer
+                            broadcaster_name = bot.get_broadcaster_name()
+                            if broadcaster_name:
+                                click.echo(f"   ✅ Stream data accessible for {streamer['name']} (@{broadcaster_name})")
+                            else:
+                                click.echo(f"   ⚠️  Could not get stream data for {streamer['name']}")
                     else:
-                        click.echo("⚠️  Authentication successful but couldn't get broadcaster name")
+                        click.echo("   ⚠️  No enabled streamers to test")
+                    
+                    if not bot.oauth_token or bot.oauth_token == 'your_twitch_oauth_token':
+                        click.echo("\n⚠️  Note: You're using client credentials.")
+                        click.echo("   For clip creation, you need a user OAuth token.")
+                        click.echo("   Run: python twitch_clip_bot.py oauth-help --generate-url")
                 else:
-                    click.echo("❌ Authentication failed")
+                    click.echo("   ❌ Authentication failed")
             
             asyncio.run(test_auth())
     
@@ -539,6 +640,150 @@ def setup_enhancement():
     else:
         click.echo("❌ Missing dependencies. Install with:")
         click.echo("   pip install moviepy yt-dlp")
+
+
+@cli.command()
+def dashboard():
+    """Start the web dashboard for monitoring performance"""
+    try:
+        from dashboard import ClippyDashboard
+        dashboard = ClippyDashboard()
+        dashboard.run()
+    except ImportError:
+        click.echo("❌ Dashboard not available. Install with: pip install flask")
+    except Exception as e:
+        click.echo(f"❌ Error starting dashboard: {e}")
+
+
+@cli.command()
+@click.argument('video_path')
+@click.option('--streamer', required=True, help='Streamer name from config')
+def upload(video_path, streamer):
+    """Upload a video to TikTok for a specific streamer"""
+    try:
+        bot = TwitchClipBot()
+        
+        if not bot.tiktok_uploader:
+            click.echo("❌ TikTok uploader not available")
+            return
+        
+        streamer_config = bot.get_streamer_config(streamer)
+        if not streamer_config:
+            click.echo(f"❌ Streamer '{streamer}' not found in config")
+            return
+        
+        success = bot.tiktok_uploader.upload_to_tiktok(video_path, streamer)
+        
+        if success:
+            click.echo(f"✅ Video queued for upload to @{streamer_config.get('tiktok_account', {}).get('username', f'{streamer}_clippy')}")
+        else:
+            click.echo("❌ Upload failed")
+            
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+def list_streamers():
+    """List all configured streamers and their status"""
+    try:
+        bot = TwitchClipBot()
+        streamers = bot.config.get('streamers', [])
+        
+        if not streamers:
+            click.echo("❌ No streamers configured")
+            return
+        
+        click.echo("📺 Configured Streamers:")
+        click.echo("=" * 50)
+        
+        for streamer in streamers:
+            status = "🟢 ENABLED" if streamer.get('enabled', False) else "🔴 DISABLED"
+            name = streamer.get('name')
+            twitch_user = streamer.get('twitch_username', name)
+            tiktok_user = streamer.get('tiktok_account', {}).get('username', f"{name}_clippy")
+            max_posts = streamer.get('tiktok_account', {}).get('max_posts_per_day', 3)
+            style = streamer.get('enhancement', {}).get('style', 'mrbeast')
+            
+            click.echo(f"\n{status} {name}")
+            click.echo(f"   Twitch: @{twitch_user}")
+            click.echo(f"   TikTok: @{tiktok_user}")
+            click.echo(f"   Max Posts/Day: {max_posts}")
+            click.echo(f"   Style: {style}")
+            
+            # Show thresholds
+            thresholds = streamer.get('thresholds', {})
+            click.echo(f"   Thresholds: {thresholds.get('chat_spike', 30)} msgs/sec, {thresholds.get('viewer_increase', 20)}% viewer jump")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+@click.argument('streamer_name')
+@click.option('--enable/--disable', default=True, help='Enable or disable streamer')
+def toggle_streamer(streamer_name, enable):
+    """Enable or disable a streamer"""
+    try:
+        config_path = Path("config.yaml")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Find and update streamer
+        updated = False
+        for streamer in config.get('streamers', []):
+            if streamer.get('name') == streamer_name:
+                streamer['enabled'] = enable
+                updated = True
+                break
+        
+        if not updated:
+            click.echo(f"❌ Streamer '{streamer_name}' not found")
+            return
+        
+        # Save updated config
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        
+        status = "enabled" if enable else "disabled"
+        click.echo(f"✅ Streamer '{streamer_name}' {status}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+@click.option('--days', default=7, help='Number of days to show stats for')
+def stats(days):
+    """Show performance statistics"""
+    try:
+        bot = TwitchClipBot()
+        
+        if bot.tiktok_uploader:
+            enabled_streamers = bot.get_enabled_streamers()
+            
+            click.echo(f"📊 Performance Stats (Last {days} days)")
+            click.echo("=" * 50)
+            
+            total_uploads = 0
+            for streamer in enabled_streamers:
+                stats = bot.tiktok_uploader.get_account_stats(streamer['name'])
+                total_uploads += stats['total_uploads']
+                
+                click.echo(f"\n🎬 {streamer['name']}")
+                click.echo(f"   Total uploads: {stats['total_uploads']}")
+                click.echo(f"   Uploads today: {stats['uploads_today']}")
+                
+                for account in stats['accounts']:
+                    click.echo(f"   Account uploads today: {account['uploads_today']}")
+            
+            click.echo(f"\n🎯 Total Network Uploads: {total_uploads}")
+            
+        else:
+            click.echo("❌ Statistics not available - TikTok uploader not initialized")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
         if os.getenv('OPENAI_API_KEY'):
             click.echo("   pip install openai  # Optional for AI text generation")
     

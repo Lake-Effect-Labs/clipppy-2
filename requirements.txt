@@ -10,3 +10,9 @@ yt-dlp>=2023.1.6
 # AI features (optional)
 openai>=1.0.0
 openai-whisper>=20231117
+whisperx>=3.4.2
+pysubs2>=1.8.0
+
+# Phase 1 features
+pyyaml>=6.0.0
+flask>=2.0.0
