@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class ClippyDashboard:
     """Dashboard for monitoring Clipppy performance"""
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config/config.yaml"):
         """Initialize dashboard with configuration"""
         self.config_path = Path(config_path)
         self.load_config()

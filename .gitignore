@@ -1,5 +1,8 @@
-# Environment variables - contains sensitive API keys
+# Environment and configuration
 .env
+env/
+venv/
+config/local_config.yaml
 
 # Python
 __pycache__/
@@ -19,50 +22,73 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
 
-# Virtual environments
-venv/
-env/
-ENV/
-.venv/
+# Video and audio files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.3gp
+*.wav
+*.mp3
+*.aac
+*.ogg
+*.flac
+*.m4a
 
-# IDE
+# Generated content
+clips/
+uploads/
+logs/
+data/upload_history.json
+data/performance_data.json
+data/stream_data.json
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+*_temp/
+*_tmp/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
+# Font files (if dynamically downloaded)
+fonts/
 
-# Logs
-*.log
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Temporary files
-*.tmp
-*.temp
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# Video files and clips
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.webm
-*.flv
-
-# Audio files
-*.wav
-*.mp3
-*.aac
-*.m4a
-
-# Clip enhancement temp directory
-temp/
-clips/
+# Development
+.mypy_cache/
+.tox/
+.nox/

@@ -1,0 +1,284 @@
+# 🎬 Clipppy - Phase 1: TikTok Automation Pipeline
+
+**Automatically creates and uploads viral clips from Twitch streams to TikTok accounts**
+
+Clipppy is an intelligent automation system that monitors Twitch streams for hype moments, creates clips when metrics spike, enhances them with MrBeast-style captions and effects, and uploads them to TikTok accounts with proper rate limiting and scheduling.
+
+## 🚀 Phase 1 Features
+
+### 🎯 **Complete Automation Pipeline**
+- **Stream Monitoring**: Real-time monitoring of multiple Twitch streamers
+- **Spike Detection**: Automated clip creation when chat/viewer spikes occur
+- **AI Enhancement**: Professional captions with word-level timing using WhisperX
+- **TikTok Upload**: Automated queuing and uploading to TikTok accounts
+- **Performance Dashboard**: Web-based monitoring and analytics
+
+### 📺 **Multi-Streamer Support**
+- Monitor multiple streamers simultaneously
+- Individual TikTok accounts per streamer (e.g., `@jynxzi_clippy`, `@shroud_clippy`)
+- Configurable thresholds and enhancement styles per streamer
+- Rate limiting and posting schedules per account
+
+### 🎨 **Professional Video Enhancement**
+- **MrBeast-Style Captions**: Large, animated text with viral emphasis
+- **Word-Level Timing**: Perfect synchronization using WhisperX
+- **TikTok Format**: Automatic conversion to 1080x1920 vertical format
+- **Viral Elements**: Emojis, emphasis colors, and dynamic animations
+- **Multiple Styles**: Configurable enhancement profiles (MrBeast, minimal, gaming, viral)
+
+### 📱 **TikTok Integration**
+- Automated upload queuing with caption generation
+- Smart rate limiting (configurable posts per day)
+- Posting time windows to maximize engagement
+- Hashtag management per streamer
+- Performance tracking and analytics
+
+### 🌐 **Web Dashboard**
+- Real-time performance monitoring
+- Upload statistics across all accounts
+- Streamer enable/disable controls
+- System health monitoring
+- Revenue tracking (simulated for Phase 1)
+
+## 📋 Installation & Setup
+
+### 1. **Install Dependencies**
+```bash
+pip install -r requirements.txt
+```
+
+### 2. **Configure Credentials**
+Copy and edit the configuration file:
+```bash
+cp config.yaml.example config.yaml
+```
+
+Edit `config.yaml` with your credentials:
+```yaml
+# Twitch API Credentials
+twitch:
+  client_id: "your_twitch_client_id"
+  client_secret: "your_twitch_client_secret"
+  oauth_token: "your_twitch_oauth_token"
+
+# TikTok API Credentials (for future implementation)
+tiktok:
+  api_key: "your_tiktok_api_key"
+  api_secret: "your_tiktok_api_secret"
+  access_token: "your_tiktok_access_token"
+
+# Configure your streamers
+streamers:
+  - name: "jynxzi"
+    twitch_username: "jynxzi"
+    broadcaster_id: "85018793"
+    enabled: true
+    # ... (see config.yaml for full configuration)
+```
+
+### 3. **Get Twitch API Credentials**
+1. Go to [Twitch Developer Console](https://dev.twitch.tv/console/apps)
+2. Create a new application
+3. Note your Client ID and Client Secret
+4. Get OAuth token with clips:edit scope:
+   ```bash
+   python twitch_clip_bot.py oauth-help --generate-url
+   ```
+
+## 🎮 Usage
+
+### **Monitor All Enabled Streamers**
+```bash
+python twitch_clip_bot.py start
+```
+
+### **Monitor Specific Streamer**
+```bash
+python twitch_clip_bot.py start --streamer jynxzi
+```
+
+### **Web Dashboard**
+```bash
+python twitch_clip_bot.py dashboard
+```
+Visit `http://localhost:8080` for real-time monitoring
+
+### **Manage Streamers**
+```bash
+# List all configured streamers
+python twitch_clip_bot.py list-streamers
+
+# Enable/disable a streamer
+python twitch_clip_bot.py toggle-streamer jynxzi --enable
+python twitch_clip_bot.py toggle-streamer shroud --disable
+
+# View performance stats
+python twitch_clip_bot.py stats --days 7
+```
+
+### **Manual Operations**
+```bash
+# Create test clip
+python twitch_clip_bot.py testclip
+
+# Upload video manually
+python twitch_clip_bot.py upload path/to/video.mp4 --streamer jynxzi
+
+# Enhance existing clip
+python twitch_clip_bot.py enhance https://clips.twitch.tv/xyz --vertical
+
+# Check configuration
+python twitch_clip_bot.py config
+```
+
+## 🏗️ System Architecture
+
+```
+┌─────────────────┐    ┌────────────────────┐    ┌─────────────────┐
+│   Twitch API    │────│  Stream Monitor    │────│  Clip Enhancer │
+│   (EventSub)    │    │  Service           │    │                 │
+└─────────────────┘    └────────────────────┘    └─────────────────┘
+                                │                          │
+                       ┌────────▼────────┐                 │
+                       │   Config.yaml   │                 │
+                       │                 │                 │
+                       │ • Streamers     │                 │
+                       │ • Thresholds    │                 │
+                       │ • TikTok Accounts│                 │
+                       │ • Enhancement   │                 │
+                       └─────────────────┘                 │
+                                                           │
+┌─────────────────┐    ┌────────────────────┐    ┌────────▼────────┐
+│  TikTok API     │────│  TikTok Uploader   │────│   WhisperX +    │
+│  (Future)       │    │  Service           │    │   MoviePy       │
+└─────────────────┘    └────────────────────┘    └─────────────────┘
+                                │
+                       ┌────────▼────────┐
+                       │  Web Dashboard  │
+                       │                 │
+                       │ • Performance   │
+                       │ • Analytics     │
+                       │ • Controls      │
+                       └─────────────────┘
+```
+
+## 📊 Performance Tracking
+
+The system tracks:
+- **Upload Statistics**: Per-account daily/total uploads
+- **Rate Limiting**: Automatic enforcement of posting schedules
+- **System Health**: Monitoring active services and error rates
+- **Revenue Simulation**: Projected earnings based on view estimates
+
+Example dashboard metrics:
+- Total uploads across all accounts: 1,247
+- Uploads today: 23
+- Total estimated views: 12.4M
+- Average views per upload: 15,200
+
+## 🎨 Enhancement Styles
+
+### **MrBeast Style** (Default)
+- Large, bold captions with heavy emphasis
+- High emoji usage and viral words
+- Bounce animations
+- Yellow emphasis color for viral moments
+
+### **Minimal Style**
+- Clean, professional captions
+- Subtle animations
+- Low emoji usage
+- Red emphasis for key moments
+
+### **Gaming Style**
+- Gaming-focused terminology
+- Medium emoji usage
+- Scale animations
+- Gaming-relevant viral words
+
+### **Viral Style**
+- Maximum viral potential
+- All effects enabled
+- High emoji frequency
+- Multiple emphasis colors
+
+## 📁 Project Structure
+
+```
+clipppy-2/
+├── twitch_clip_bot.py      # Main CLI application
+├── clip_enhancer.py        # Video enhancement with MoviePy + WhisperX
+├── tiktok_uploader.py      # TikTok upload queue and rate limiting
+├── dashboard.py            # Web dashboard for monitoring
+├── config.yaml             # Main configuration file
+├── requirements.txt        # Python dependencies
+├── clips/                  # Generated clips and temp files
+├── uploads/               # TikTok upload queue (organized by account)
+├── data/                  # Upload history and analytics
+├── logs/                  # System logs
+└── README.md              # This file
+```
+
+## 🔄 Phase 1 Workflow
+
+1. **Stream Detection**: Monitor configured streamers for live status
+2. **Spike Detection**: Analyze chat messages/second and viewer growth
+3. **Clip Creation**: Use Twitch API to create 30-second clips
+4. **Enhancement Pipeline**:
+   - Download clip with yt-dlp
+   - Transcribe audio with WhisperX (word-level timing)
+   - Generate viral captions with emphasis and emojis
+   - Convert to TikTok 1080x1920 format
+   - Render final video with MoviePy
+5. **Upload Queue**: Add to TikTok upload queue with proper rate limiting
+6. **Analytics**: Track performance and update dashboard
+
+## 🎯 Business Model (Phase 1 Scope)
+
+**Revenue Sources:**
+- TikTok Creator Fund payments (~$0.40 per 1K views)
+- Potential sponsorship integration
+- Future: Direct streamer service offerings
+
+**Scaling Projections:**
+- 10 streamers × 5 clips/day = 1,500 clips/month
+- Estimated 10.2M views/month per account
+- Target: $5K-$10K/month revenue at scale
+
+## 🚧 Current Limitations (Phase 1)
+
+- **TikTok API**: Manual upload queue (automatic API integration in Phase 2)
+- **Single Instance**: One Clipppy instance per machine (containerization in Phase 2)
+- **Basic Analytics**: Simulated revenue data (real TikTok analytics in Phase 2)
+
+## 🔧 Troubleshooting
+
+### **Configuration Issues**
+```bash
+python twitch_clip_bot.py config  # Check system status
+```
+
+### **Common Problems**
+- **"No streamers enabled"**: Edit config.yaml and set `enabled: true`
+- **"Whisper transcription failed"**: Install with `pip install openai-whisper`
+- **"Dashboard not available"**: Install with `pip install flask`
+
+### **Debug Mode**
+Enable detailed logging by editing the logging level in the code or config.
+
+## 📈 Next Steps (Phase 2)
+
+- Direct TikTok API integration for automatic uploads
+- Multi-instance deployment with Docker
+- Real-time TikTok analytics integration
+- Advanced AI features (GPT-4 for captions, DALL-E for thumbnails)
+- Streamer partnership program
+- Advanced revenue optimization
+
+## 📄 License
+
+This project is provided for educational and commercial use. Please respect Twitch and TikTok Terms of Service.
+
+---
+
+**🎬 Ready to create viral content? Get started with Phase 1!**

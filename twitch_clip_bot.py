@@ -21,8 +21,8 @@ import yaml
 
 # Import our enhanced modules
 try:
-    from clip_enhancer import ClipEnhancer, check_dependencies
-    from tiktok_uploader import TikTokUploader
+    from src.clip_enhancer import ClipEnhancer, check_dependencies
+    from services.tiktok_uploader import TikTokUploader
 except ImportError as e:
     print(f"⚠️ Import error: {e}")
     ClipEnhancer = None
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 class TwitchClipBot:
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config/config.yaml"):
         """Initialize bot with YAML configuration"""
         self.config_path = Path(config_path)
         self.load_config()
@@ -646,7 +646,7 @@ def setup_enhancement():
 def dashboard():
     """Start the web dashboard for monitoring performance"""
     try:
-        from dashboard import ClippyDashboard
+        from services.dashboard import ClippyDashboard
         dashboard = ClippyDashboard()
         dashboard.run()
     except ImportError:
@@ -725,7 +725,7 @@ def list_streamers():
 def toggle_streamer(streamer_name, enable):
     """Enable or disable a streamer"""
     try:
-        config_path = Path("config.yaml")
+        config_path = Path("config/config.yaml")
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         

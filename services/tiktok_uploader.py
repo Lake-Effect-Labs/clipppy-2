@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class TikTokUploader:
     """Manages TikTok uploads with rate limiting and account management"""
     
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config/config.yaml"):
         """Initialize TikTok uploader with configuration"""
         self.config_path = Path(config_path)
         self.load_config()
