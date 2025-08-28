@@ -51,7 +51,7 @@ class ViralDetector:
         self.current_streamer = None
         
         # Algorithm configuration
-        alg_config = config.get('viral_algorithm', {})
+        alg_config = config.get('global', {}).get('viral_algorithm', {})
         self.score_threshold = alg_config.get('score_threshold', 1.0)
         self.min_unique_chatters = alg_config.get('min_unique_chatters', 30)
         self.cooldown_seconds = alg_config.get('cooldown_seconds', 120)
@@ -249,7 +249,7 @@ class ViralDetector:
     def calculate_viral_score(self) -> Tuple[float, Dict]:
         """Calculate the viral moment score and component breakdown"""
         # Skip if stream just started (need baseline)
-        if self.stream_start_time and (time.time() - self.stream_start_time) < 600:  # 10 minutes
+        if self.stream_start_time and (time.time() - self.stream_start_time) < (self.baseline_window_minutes * 60):  # Use config value
             return 0.0, {"reason": "building_baseline"}
         
         # 1. Chat velocity component
@@ -303,8 +303,13 @@ class ViralDetector:
         # Calculate viral score
         score, breakdown = self.calculate_viral_score()
         
+        # Debug logging
+        logger.info(f"🧪 Viral Debug - Score: {score:.3f}, Breakdown: {breakdown}")
+        
         # Check unique chatters requirement
         unique_chatters = breakdown.get("unique_chatters", 0)
+        logger.info(f"🧪 Chat Debug - Unique: {unique_chatters}, Min Required: {self.min_unique_chatters}")
+        
         if unique_chatters < self.min_unique_chatters:
             return False, f"Not enough unique chatters ({unique_chatters}/{self.min_unique_chatters})", breakdown
         

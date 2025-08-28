@@ -15,19 +15,26 @@ import logging
 try:
     # Try direct import from moviepy (newer versions)
     import moviepy
+    import moviepy.config as mpconf
+    # Configure ImageMagick path for Windows
+    mpconf.IMAGEMAGICK_BINARY = r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
     VideoFileClip = moviepy.VideoFileClip
     TextClip = moviepy.TextClip
     CompositeVideoClip = moviepy.CompositeVideoClip
     AudioFileClip = moviepy.AudioFileClip
+    CompositeAudioClip = moviepy.CompositeAudioClip
     MOVIEPY_AVAILABLE = True
 except (ImportError, AttributeError):
     try:
         # Fallback to editor import for older versions
-        from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, AudioFileClip
+        from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, AudioFileClip, CompositeAudioClip
+        import moviepy.config as mpconf
+        # Configure ImageMagick path for Windows
+        mpconf.IMAGEMAGICK_BINARY = r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
         MOVIEPY_AVAILABLE = True
     except ImportError:
         print("⚠️  MoviePy not installed. Run: pip install moviepy")
-        VideoFileClip = TextClip = CompositeVideoClip = AudioFileClip = None
+        VideoFileClip = TextClip = CompositeVideoClip = AudioFileClip = CompositeAudioClip = None
         MOVIEPY_AVAILABLE = False
 
 try:
@@ -364,13 +371,12 @@ class ClipEnhancer:
             
             # Create PROFESSIONAL viral text clip
             text_clip = TextClip(
-                text=display_text,
-                font_size=font_size,
+                display_text,
+                fontsize=font_size,
                 color='white',  # Always white for best contrast
                 stroke_color='black',
-                stroke_width=3,  # Clean outline
-                duration=duration
-            )
+                stroke_width=3  # Clean outline
+            ).set_duration(duration)
             
             # Skip glow effect for performance - just use thicker stroke for emphasis
             if has_emphasis:
@@ -535,14 +541,13 @@ class ClipEnhancer:
                         # Create a VERY visible test caption as fallback
                         logger.info("🧪 Creating SUPER VISIBLE test caption as fallback...")
                         test_clip = TextClip(
-                            text="🔥🔥🔥 TEST CAPTION VISIBLE? 🔥🔥🔥",
-                            font_size=100,
+                            "🔥🔥🔥 TEST CAPTION VISIBLE? 🔥🔥🔥",
+                            fontsize=100,
                             color='red',
                             stroke_color='white',
                             stroke_width=6,
-                            duration=min(10.0, video.duration),  # Show for 10 seconds or video length
                             size=video.size
-                        ).with_position(('center', video.size[1] // 2))  # Center of screen
+                        ).set_duration(min(10.0, video.duration)).with_position(('center', video.size[1] // 2))  # Center of screen
                         clips_to_composite.append(test_clip)
                         logger.info("✅ MASSIVE test caption added to center of screen")
                 else:
@@ -554,12 +559,11 @@ class ClipEnhancer:
                 try:
                     # Create text clip with basic parameters for compatibility
                     text_clip = TextClip(
-                        text=text_overlay,
-                        font_size=font_size,
+                        text_overlay,
+                        fontsize=font_size,
                         color='white',
-                        duration=text_duration,
                         size=video.size  # Use video size
-                    )
+                    ).set_duration(text_duration)
                     
                     # Simple center positioning
                     clips_to_composite.append(text_clip)
@@ -584,7 +588,7 @@ class ClipEnhancer:
                         # Add sound effect at the beginning
                         if sound_clip.duration <= final_video.duration:
                             sound_clip = sound_clip.set_start(0.2)  # Slight delay
-                            mixed_audio = mixed_audio.overlay(sound_clip)
+                            mixed_audio = CompositeAudioClip([mixed_audio, sound_clip])
                         
                         final_video = final_video.set_audio(mixed_audio)
                         sound_clip.close()

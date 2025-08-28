@@ -7,13 +7,14 @@ global:
   max_clips_per_day: 5
   monitoring_interval: 30
   cleanup_temp_files: true
+  auto_enhance: true
   use_test_virality_alg: true
   default_thresholds:
     chat_spike: 30
     viewer_increase: 20
     time_window: 10
   viral_algorithm:
-    score_threshold: 0.8
+    score_threshold: 1.0
     min_unique_chatters: 30
     cooldown_seconds: 120
     baseline_window_minutes: 10
@@ -23,6 +24,146 @@ global:
       viewer_delta: 0.3
       engagement_events: 0.2
       follow_rate: 0.1
+enhancement_presets:
+  viral_shorts:
+    format:
+      target_resolution:
+      - 1080
+      - 1920
+      smart_crop: true
+      split_screen: true  # NEW: Enable viral split-screen layout
+      blur_background: true
+      safe_zones:
+        caption_bottom: 0.25
+        watermark_corners: true
+    captions:
+      enabled: true
+      karaoke_sync: true
+      emphasis_map:
+      - NO WAY
+      - INSANE
+      - CLUTCH
+      - POGGERS
+      - SHEESH
+      hook_line:
+        enabled: false  # Disabled hardcoded text
+        duration: 2.0
+        templates:
+        - "NO SHOT \xF0\u0178\u02DC\xB1"
+        - WAIT FOR IT...
+        - ABSOLUTE MADNESS
+      viral_effects:
+        enabled: true  # NEW: Viral TikTok effects
+        zoom_enabled: true
+        shake_enabled: true
+        flash_enabled: true
+      profanity_filter: pg
+      style:
+        font_family: Montserrat ExtraBold
+        font_size: 72
+        fill_color: '#FFFFFF'
+        outline_color: '#000000'
+        outline_width: 4
+        emphasis_color: '#FF0000'
+        emphasis_size_boost: 1.2
+    audio:
+      normalize_lufs: -14
+      lufs_tolerance: 1
+      sfx_enabled: false
+      compression: light
+      trim_silence_ms: 400
+    tempo:
+      jumpcut_silence_ms: 400
+      speed_ramp_enabled: true
+      speed_range:
+      - 0.95
+      - 1.1
+      impact_effects: subtle
+      progress_bar: false
+    branding:
+      watermark:
+        enabled: true
+        handle_text: '@{streamer}_clippy'
+        position_grid: true
+        opacity: 0.8
+      border:
+        enabled: true
+        width_px: 3
+        color: '#FF6B35'
+      vignette:
+        enabled: true
+        intensity: 0.15
+      end_slate:
+        enabled: true
+        duration: 1.5
+        template: Clipped by Clipppy AI
+      attribution:
+        enabled: true
+        text: Clipped from @{streamer}
+        position: top_left
+    overlays:
+      chat_burst:
+        enabled: false
+      event_tags:
+        enabled: false
+    mascot:
+      enabled: false
+      note: Waiting for animator - mascot system disabled
+    platform:
+      output_codec: libx264
+      output_crf: 18
+      output_preset: veryfast
+      thumbnail_frame: largest_caption
+      posting_caption_template: "\xF0\u0178\u201D\xA5 {hook_line} from @{streamer}\
+        \ #{game} #viral #clips"
+      hashtags:
+      - viral
+      - clips
+      - gaming
+      - twitch
+    telemetry:
+      enabled: true
+      track_metrics:
+      - processing_time_ms
+      - words_rendered
+      - emphasis_hits
+      - lufs_before
+      - lufs_after
+  gaming_highlights:
+    format:
+      target_resolution:
+      - 1080
+      - 1920
+      smart_crop: true
+      blur_background: true
+    captions:
+      enabled: true
+      karaoke_sync: false
+      emphasis_map:
+      - HEADSHOT
+      - ACE
+      - CLUTCH
+      - WIN
+      profanity_filter: false
+      style:
+        font_family: Arial Bold
+        font_size: 64
+        fill_color: '#FFFFFF'
+        outline_color: '#000000'
+        outline_width: 3
+    audio:
+      normalize_lufs: -16
+      compression: false
+    branding:
+      watermark:
+        enabled: true
+      border:
+        enabled: false
+    platform:
+      hashtags:
+      - gaming
+      - highlights
+      - esports
 streamers:
 - name: jynxzi
   twitch_username: jynxzi
@@ -45,30 +186,29 @@ streamers:
     - '#viral'
     - '#fyp'
   enhancement:
-    style: mrbeast
-    vertical_format: true
-    add_captions: true
-    add_emojis: true
-    add_sound_effects: false
-    captions:
-      font_size: 60
-      emphasis_size: 76
-      font_color: white
-      emphasis_color: yellow
-      stroke_width: 3
-      position: bottom
-      viral_words:
-      - INSANE
-      - CLUTCH
-      - NO WAY
-      - POGGERS
-      - WTF
-      - OMG
-    audio:
-      boost_volume: 1.2
-      normalize: true
-      add_intro_sound: false
-      add_outro_sound: false
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - CLUTCH
+        - NO WAY
+        - POGGERS
+        - WTF
+        - JYNXZI
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@jynxzi_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
 - name: shroud
   twitch_username: shroud
   broadcaster_id: '37402112'
@@ -90,24 +230,50 @@ streamers:
     - '#pro'
     - '#viral'
   enhancement:
-    style: minimal
-    vertical_format: true
-    add_captions: true
-    add_emojis: false
-    add_sound_effects: false
-    captions:
-      font_size: 55
-      emphasis_size: 70
-      font_color: white
-      emphasis_color: red
-      stroke_width: 2
-      position: bottom
-      viral_words:
-      - INSANE
-      - HEADSHOT
-      - ACE
-      - CLEAN
-      - PERFECT
+    preset: gaming_highlights
+    overrides:
+      captions:
+        emphasis_map:
+        - INSANE
+        - HEADSHOT
+        - ACE
+        - CLEAN
+        - PERFECT
+        - SHROUD
+- name: eliasn97
+  twitch_username: eliasn97
+  broadcaster_id: '238813810'
+  enabled: false
+  thresholds:
+    chat_spike: 1.0
+    viewer_increase: 1.0
+    time_window: 10
+  tiktok_account:
+    username: eliasn97_clippy
+    max_posts_per_day: 5
+    posting_hours:
+      start: 10
+      end: 23
+    hashtags:
+    - '#eliasn97'
+    - '#gaming'
+    - '#viral'
+    - '#clips'
+    - '#fyp'
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        emphasis_map:
+        - INSANE
+        - CLUTCH
+        - NO WAY
+        - POGGERS
+        - WTF
+        - ELIASN97
+      branding:
+        watermark:
+          handle_text: '@eliasn97_clippy'
 enhancement_styles:
   mrbeast:
     description: MrBeast-style viral captions with heavy emphasis

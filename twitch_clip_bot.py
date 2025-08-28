@@ -26,13 +26,16 @@ load_dotenv()
 
 # Import our enhanced modules
 try:
-    from clip_enhancer import ClipEnhancer, check_dependencies
+    from clip_enhancer import ClipEnhancer, check_dependencies as check_deps_v1
+    from clip_enhancer_v2 import ClipEnhancerV2, check_dependencies
     from tiktok_uploader import TikTokUploader
     from viral_detector import ViralDetector
 except ImportError as e:
     print(f"⚠️ Import error: {e}")
     ClipEnhancer = None
+    ClipEnhancerV2 = None
     check_dependencies = None
+    check_deps_v1 = None
     TikTokUploader = None
     ViralDetector = None
 
@@ -54,6 +57,7 @@ class TwitchClipBot:
         # Initialize components
         self.tiktok_uploader = TikTokUploader(config_path) if TikTokUploader else None
         self.clip_enhancer = ClipEnhancer() if ClipEnhancer else None
+        self.clip_enhancer_v2 = ClipEnhancerV2(config_path) if ClipEnhancerV2 else None
         self.viral_detector = ViralDetector(self.config) if ViralDetector else None
         
         # Twitch API setup from environment variables (for security)
@@ -347,19 +351,29 @@ class TwitchClipBot:
                 if reason:
                     logger.info(f"   Reason: {reason}")
                 
-                # Auto-enhance clip if enabled
-                if self.auto_enhance and self.enhancer:
-                    logger.info("🎨 Auto-enhancing clip...")
-                    use_captions = os.getenv('USE_CAPTIONS', 'true').lower() == 'true'
-                    enhanced_result = self.enhancer.auto_enhance_clip(clip_url, reason, use_captions=use_captions)
-                    if enhanced_result:
-                        logger.info(f"✨ Enhanced clip saved: {enhanced_result['enhanced_path']}")
-                        if enhanced_result.get('has_captions'):
-                            logger.info("   Features: Animated captions with speech-to-text")
-                        if enhanced_result.get('text_overlay'):
-                            logger.info(f"   Text: {enhanced_result['text_overlay']}")
-                        if enhanced_result.get('sound_effect'):
-                            logger.info(f"   Sound: {enhanced_result['sound_effect']}")
+                # Auto-enhance clip if enabled - using v2 enhancer
+                if self.auto_enhance and self.clip_enhancer_v2:
+                    logger.info("🎨 Auto-enhancing clip with v2 system...")
+                    try:
+                        # Download clip first using v1 enhancer
+                        if self.clip_enhancer:
+                            clip_path = self.clip_enhancer.download_clip(clip_url)
+                            if clip_path:
+                                logger.info(f"📥 Downloaded clip for enhancement")
+                                
+                                # Enhance with v2 system using current streamer config
+                                enhanced_path, telemetry = self.clip_enhancer_v2.enhance_clip(clip_path, self.current_streamer)
+                                
+                                logger.info(f"✨ Enhanced clip saved: {enhanced_path}")
+                                logger.info(f"📊 Processing time: {telemetry.processing_time_ms}ms")
+                                logger.info(f"📊 Words rendered: {telemetry.words_rendered}")
+                                logger.info(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
+                            else:
+                                logger.warning("Failed to download clip for enhancement")
+                        else:
+                            logger.warning("v1 enhancer not available for downloading")
+                    except Exception as e:
+                        logger.error(f"Auto-enhancement failed: {e}")
                 
                 return clip_url
             
@@ -428,6 +442,28 @@ class TwitchClipBot:
             logger.error(f"Monitoring error: {e}")
         finally:
             chat_task.cancel()
+    
+    async def start_monitoring_streamer(self, streamer_config: Dict):
+        """Start monitoring a specific streamer"""
+        # Set the current streamer
+        self.set_current_streamer(streamer_config)
+        
+        # Start monitoring
+        await self.start_monitoring()
+    
+    async def start_monitoring_all(self):
+        """Start monitoring all enabled streamers"""
+        enabled_streamers = self.get_enabled_streamers()
+        
+        if len(enabled_streamers) == 1:
+            # If only one streamer, monitor directly
+            await self.start_monitoring_streamer(enabled_streamers[0])
+        else:
+            # For multiple streamers, we'd need concurrent monitoring
+            # For now, just monitor the first enabled streamer
+            logger.warning(f"⚠️ Multiple streamers detected ({len(enabled_streamers)}), monitoring first one only")
+            logger.info("💡 Full multi-streamer support coming soon!")
+            await self.start_monitoring_streamer(enabled_streamers[0])
 
 
 # CLI Interface
@@ -703,6 +739,53 @@ def setup_enhancement():
     else:
         click.echo("❌ Missing dependencies. Install with:")
         click.echo("   pip install moviepy yt-dlp")
+
+
+@cli.command()
+@click.argument('clip_url')
+@click.option('--streamer', default='jynxzi', help='Streamer name for preset selection')
+def enhance_v2(clip_url, streamer):
+    """Enhance clip with v2 preset-based system"""
+    try:
+        if not ClipEnhancerV2:
+            click.echo("❌ Enhancement v2 not available")
+            return
+        
+        bot = TwitchClipBot()
+        streamer_config = bot.get_streamer_config(streamer)
+        
+        if not streamer_config:
+            click.echo(f"❌ Streamer '{streamer}' not found in config")
+            return
+        
+        # Use old enhancer to download clip
+        if ClipEnhancer:
+            enhancer_v1 = ClipEnhancer()
+            click.echo(f"📥 Downloading clip: {clip_url}")
+            clip_path = enhancer_v1.download_clip(clip_url)
+        else:
+            click.echo("❌ Cannot download clip - v1 enhancer not available")
+            return
+        
+        if not clip_path:
+            click.echo("❌ Failed to download clip")
+            return
+        
+        click.echo(f"🎬 Downloaded to: {clip_path}")
+        
+        # Enhance with v2 system
+        enhancer_v2 = ClipEnhancerV2()
+        click.echo(f"🎨 Enhancing with preset system for {streamer}...")
+        
+        enhanced_path, telemetry = enhancer_v2.enhance_clip(clip_path, streamer_config)
+        
+        click.echo(f"✅ Enhanced clip ready: {enhanced_path}")
+        click.echo(f"📊 Processing time: {telemetry.processing_time_ms}ms")
+        click.echo(f"📊 Words rendered: {telemetry.words_rendered}")
+        click.echo(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
 
 
 @cli.command()
