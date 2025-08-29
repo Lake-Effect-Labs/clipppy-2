@@ -24,6 +24,7 @@ import random
 import math
 import hashlib
 from pathlib import Path
+from emotion_detector import StreamerEmotionDetector
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 import tempfile
@@ -120,6 +121,9 @@ class ClipEnhancerV2:
             
         # Whisper model (lazy loading)
         self.whisper_model = None
+        
+        # Initialize emotion detection system
+        self.emotion_detector = StreamerEmotionDetector()
         
         logger.info("🎨 ClipEnhancerV2 initialized")
     
@@ -315,9 +319,9 @@ class ClipEnhancerV2:
             face_region, gameplay_region = self._detect_face_and_gameplay(video)
             
             if face_region and gameplay_region:
-                # Create split-screen: gameplay top (75%), face bottom (25%) - gameplay focused
-                gameplay_height = int(target_h * 0.75)  # Top 75% for gameplay focus
-                face_height = target_h - gameplay_height  # Bottom 25% for face
+                # Create split-screen: gameplay top (60%), face bottom (40%) - balanced layout
+                gameplay_height = int(target_h * 0.6)  # Top 60% for gameplay
+                face_height = target_h - gameplay_height  # Bottom 40% for face
                 
                 # Extract and resize gameplay area (top half)
                 gameplay_clip = video.crop(
@@ -490,9 +494,10 @@ class ClipEnhancerV2:
         fast_mode = viral_config.get('fast_mode', False)  # Skip heavy effects for testing
         
         if viral_config.get('enabled', True) and not fast_mode:
-            # Apply both word-based and volume-based effects
+            # Apply word-based, volume-based, and emotion-based effects
             video = self._apply_viral_effects(video, words, viral_config)
             video = self._apply_volume_based_effects(video, clip_path, viral_config)
+            video = self._apply_emotion_based_effects(video, clip_path, viral_config)
         elif fast_mode:
             logger.info("⚡ Fast mode enabled - skipping viral effects for speed")
         
@@ -661,7 +666,8 @@ class ClipEnhancerV2:
     def _apply_volume_based_effects(self, video, clip_path: Path, viral_config: Dict):
         """Apply camera shake based on audio volume levels (rage detection)"""
         try:
-            if not viral_config.get('volume_shake_enabled', True):
+            # Temporarily disabled due to MoviePy CompositeAudioClip fps compatibility issues
+            if not viral_config.get('volume_shake_enabled', False):  # Default to False
                 return video
             
             logger.info("🔊 Analyzing audio for rage moments...")
@@ -741,6 +747,197 @@ class ClipEnhancerV2:
             
         except Exception as e:
             logger.error(f"❌ Volume-based effects failed: {e}")
+            return video
+    
+    def _apply_emotion_based_effects(self, video, clip_path: Path, viral_config: Dict):
+        """Apply effects based on AI-detected streamer emotions"""
+        try:
+            if not viral_config.get('emotion_effects_enabled', True):
+                return video
+            
+            logger.info("🤖 Analyzing streamer emotions for targeted effects...")
+            
+            # Detect emotional segments
+            emotion_segments = self.emotion_detector.detect_emotional_segments(str(clip_path))
+            
+            if not emotion_segments:
+                logger.info("😐 No strong emotional moments detected")
+                return video
+            
+            logger.info(f"🎭 Found {len(emotion_segments)} emotional segments")
+            
+            # Apply effects for each emotional segment
+            for segment in emotion_segments:
+                logger.info(f"🎬 Applying {segment.dominant_emotion} effects at {segment.start_time:.1f}s")
+                
+                # Apply effects based on emotion type
+                if segment.dominant_emotion == 'hype':
+                    video = self._apply_hype_effects(video, segment)
+                elif segment.dominant_emotion == 'tilt':
+                    video = self._apply_tilt_effects(video, segment)
+                elif segment.dominant_emotion == 'shock':
+                    video = self._apply_shock_effects(video, segment)
+                elif segment.dominant_emotion == 'confused':
+                    video = self._apply_confused_effects(video, segment)
+                
+                # Add emotion text overlay
+                emotion_text = self.emotion_detector.get_emotion_text_overlay(
+                    segment.dominant_emotion, segment.intensity
+                )
+                video = self._add_emotion_text(video, segment, emotion_text)
+            
+            return video
+            
+        except Exception as e:
+            logger.error(f"❌ Emotion-based effects failed: {e}")
+            return video
+    
+    def _apply_hype_effects(self, video, segment):
+        """Apply effects for hype moments"""
+        try:
+            # Intense zoom + shake combo
+            zoom_factor = 1.1 + (segment.intensity * 0.1)  # 1.1x to 1.2x zoom
+            shake_intensity = segment.intensity * 0.12
+            
+            # Golden flash effect
+            flash_duration = 0.3
+            
+            # Apply zoom
+            video = self._add_dramatic_zoom(video, segment.start_time, 
+                                          segment.end_time - segment.start_time, zoom_factor)
+            
+            # Apply shake throughout segment
+            video = self._add_screen_shake(video, segment.start_time, 
+                                         segment.end_time - segment.start_time, shake_intensity)
+            
+            # Flash at start of hype moment
+            video = self._add_flash_effect(video, segment.start_time, flash_duration, 
+                                         color=(255, 215, 0))  # Gold flash
+            
+            logger.info(f"🔥 Applied hype effects: zoom {zoom_factor:.2f}x, shake {shake_intensity:.2f}")
+            return video
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Hype effects failed: {e}")
+            return video
+    
+    def _apply_tilt_effects(self, video, segment):
+        """Apply effects for tilt/rage moments"""
+        try:
+            # Red tint + aggressive shake
+            shake_intensity = segment.intensity * 0.15
+            
+            # Apply red tint overlay
+            video = self._add_color_tint(video, segment.start_time, 
+                                       segment.end_time - segment.start_time, 
+                                       color=(255, 100, 100), opacity=0.2)
+            
+            # Aggressive shake
+            video = self._add_screen_shake(video, segment.start_time, 
+                                         segment.end_time - segment.start_time, shake_intensity)
+            
+            logger.info(f"😡 Applied tilt effects: red tint + shake {shake_intensity:.2f}")
+            return video
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Tilt effects failed: {e}")
+            return video
+    
+    def _apply_shock_effects(self, video, segment):
+        """Apply effects for shock moments"""
+        try:
+            # Freeze frame + fast zoom
+            freeze_duration = 0.5
+            zoom_factor = 1.15
+            
+            # Quick freeze effect
+            video = self._add_freeze_frame(video, segment.start_time, freeze_duration)
+            
+            # Fast zoom in
+            video = self._add_dramatic_zoom(video, segment.start_time + freeze_duration, 
+                                          0.3, zoom_factor)
+            
+            # White flash
+            video = self._add_flash_effect(video, segment.start_time, 0.2, 
+                                         color=(255, 255, 255))
+            
+            logger.info(f"😱 Applied shock effects: freeze + zoom {zoom_factor:.2f}x")
+            return video
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Shock effects failed: {e}")
+            return video
+    
+    def _apply_confused_effects(self, video, segment):
+        """Apply effects for confused moments"""
+        try:
+            # Slow zoom out + question mark overlay
+            zoom_factor = 0.95  # Zoom out slightly
+            
+            video = self._add_dramatic_zoom(video, segment.start_time, 
+                                          segment.end_time - segment.start_time, zoom_factor)
+            
+            logger.info(f"🤔 Applied confused effects: zoom out {zoom_factor:.2f}x")
+            return video
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Confused effects failed: {e}")
+            return video
+    
+    def _add_color_tint(self, video, start_time, duration, color=(255, 0, 0), opacity=0.3):
+        """Add colored tint overlay"""
+        try:
+            # Create colored overlay
+            color_clip = mp.ColorClip(size=video.size, color=color, duration=duration)
+            color_clip = color_clip.set_opacity(opacity).set_start(start_time)
+            
+            # Composite with video
+            video = mp.CompositeVideoClip([video, color_clip])
+            return video
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Color tint failed: {e}")
+            return video
+    
+    def _add_freeze_frame(self, video, start_time, duration):
+        """Add freeze frame effect"""
+        try:
+            # Extract frame at freeze point
+            freeze_frame = video.to_ImageClip(t=start_time).set_duration(duration)
+            
+            # Replace video segment with frozen frame
+            before_freeze = video.subclip(0, start_time)
+            after_freeze = video.subclip(start_time + duration)
+            
+            video = mp.concatenate_videoclips([before_freeze, freeze_frame, after_freeze])
+            return video
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Freeze frame failed: {e}")
+            return video
+    
+    def _add_emotion_text(self, video, segment, text):
+        """Add emotion-specific text overlay"""
+        try:
+            # Position emotion text at top of screen (above captions)
+            text_clip = mp.TextClip(
+                text,
+                fontsize=80,
+                color='yellow',
+                font='Arial Black',
+                stroke_color='black',
+                stroke_width=3
+            ).set_duration(min(2.0, segment.end_time - segment.start_time))
+            
+            # Position at top center
+            text_clip = text_clip.set_position(('center', video.h * 0.1)).set_start(segment.start_time)
+            
+            # Composite with video
+            video = mp.CompositeVideoClip([video, text_clip])
+            return video
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Emotion text failed: {e}")
             return video
     
     def _transcribe_audio(self, clip_path: Path) -> Optional[List[Dict]]:
@@ -845,10 +1042,10 @@ class ClipEnhancerV2:
         viral_fonts = ['Impact', 'Arial Black', 'Trebuchet MS Bold', 'Verdana Bold', 'Arial Bold']
         outline_width = style_config.get('outline_width', 6)  # Balanced outline
         
-        # Calculate position - at bottom of gameplay section (now 75% of screen)
+        # Calculate position - at bottom of gameplay section (60% of screen)
         video_w, video_h = video_size
-        # Position at 70% down the screen (bottom of 75% gameplay area)
-        y_position = video_h * 0.70
+        # Position at 55% down the screen (bottom of 60% gameplay area)
+        y_position = video_h * 0.55
         
         for phrase in phrases:
             # Create phrase text with emphasis styling

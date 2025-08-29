@@ -58,10 +58,16 @@ enhancement_presets:
         zoom_enabled: true
         shake_enabled: true
         flash_enabled: true
-        # Volume-based rage detection (temporarily disabled due to MoviePy compatibility)
-        volume_shake_enabled: false  # Disabled until MoviePy audio issues fixed
-        rage_volume_threshold: 0.2  # Volume level to trigger shake (0.0-1.0)
-        rage_shake_intensity: 0.10  # How strong the rage shake is
+                      # Volume-based rage detection (temporarily disabled due to MoviePy compatibility)
+              volume_shake_enabled: false  # Disabled until MoviePy audio issues fixed
+              rage_volume_threshold: 0.2  # Volume level to trigger shake (0.0-1.0)
+              rage_shake_intensity: 0.10  # How strong the rage shake is
+              
+              # AI Emotion Detection - analyzes streamer face + voice for targeted effects
+              emotion_effects_enabled: true  # Enable emotion-based effects
+              hype_intensity: 1.0      # Multiplier for hype effects (zoom, shake, flash)
+              tilt_intensity: 1.0      # Multiplier for tilt effects (red tint, shake)
+              shock_intensity: 1.0     # Multiplier for shock effects (freeze, zoom)
       profanity_filter: pg
       style:
         font_family: Montserrat ExtraBold
