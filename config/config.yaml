@@ -54,9 +54,14 @@ enhancement_presets:
         - ABSOLUTE MADNESS
       viral_effects:
         enabled: true  # NEW: Viral TikTok effects
+        fast_mode: false  # Set to true for faster processing (skips effects)
         zoom_enabled: true
         shake_enabled: true
         flash_enabled: true
+        # Volume-based rage detection (temporarily disabled due to MoviePy compatibility)
+        volume_shake_enabled: false  # Disabled until MoviePy audio issues fixed
+        rage_volume_threshold: 0.2  # Volume level to trigger shake (0.0-1.0)
+        rage_shake_intensity: 0.10  # How strong the rage shake is
       profanity_filter: pg
       style:
         font_family: Montserrat ExtraBold

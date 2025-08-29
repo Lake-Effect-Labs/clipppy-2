@@ -216,10 +216,16 @@ class ClipEnhancerV2:
             
             logger.info(f"🎬 Starting enhancement pipeline for {clip_path.name}")
             
-            # Setup output path
+            # Setup output path in streamer-specific folder
             if not output_path:
                 timestamp = int(time.time())
-                output_path = self.clips_dir / f"enhanced_{streamer_name}_{timestamp}.mp4"
+                
+                # Create streamer-specific directory
+                streamer_clips_dir = self.clips_dir / streamer_name
+                streamer_clips_dir.mkdir(exist_ok=True)
+                
+                output_path = streamer_clips_dir / f"enhanced_{streamer_name}_{timestamp}.mp4"
+                logger.info(f"📁 Saving to streamer folder: {streamer_clips_dir}")
             else:
                 output_path = Path(output_path)
             
@@ -309,9 +315,9 @@ class ClipEnhancerV2:
             face_region, gameplay_region = self._detect_face_and_gameplay(video)
             
             if face_region and gameplay_region:
-                # Create split-screen: gameplay top (60%), face bottom (40%)
-                gameplay_height = int(target_h * 0.6)  # Top 60%
-                face_height = target_h - gameplay_height  # Bottom 40%
+                # Create split-screen: gameplay top (75%), face bottom (25%) - gameplay focused
+                gameplay_height = int(target_h * 0.75)  # Top 75% for gameplay focus
+                face_height = target_h - gameplay_height  # Bottom 25% for face
                 
                 # Extract and resize gameplay area (top half)
                 gameplay_clip = video.crop(
@@ -481,8 +487,14 @@ class ClipEnhancerV2:
         
         # 🚀 VIRAL EFFECTS - Apply zoom, shake, and flash effects during emphasis moments
         viral_config = captions_config.get('viral_effects', {})
-        if viral_config.get('enabled', True):
+        fast_mode = viral_config.get('fast_mode', False)  # Skip heavy effects for testing
+        
+        if viral_config.get('enabled', True) and not fast_mode:
+            # Apply both word-based and volume-based effects
             video = self._apply_viral_effects(video, words, viral_config)
+            video = self._apply_volume_based_effects(video, clip_path, viral_config)
+        elif fast_mode:
+            logger.info("⚡ Fast mode enabled - skipping viral effects for speed")
         
         # Create karaoke captions
         if captions_config.get('karaoke_sync', True) and words:
@@ -528,27 +540,27 @@ class ClipEnhancerV2:
                 word_upper = word.text.upper()
                 
                 if any(trigger in word_upper for trigger in ['INSANE', 'CRAZY', 'WTF']):
-                    # MEGA EXTREME EFFECTS for maximum viral impact
-                    video = self._add_screen_shake(video, effect_start, effect_duration, intensity=0.5)  # Much stronger
-                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.8)  # Much bigger zoom
-                    video = self._add_flash_effect(video, effect_start, 0.2)  # Longer flash
+                    # MEGA EFFECTS - toned down for better experience
+                    video = self._add_screen_shake(video, effect_start, effect_duration, intensity=0.08)  # Reduced intensity
+                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.3)  # More reasonable zoom
+                    video = self._add_flash_effect(video, effect_start, 0.12)  # Shorter flash
                     effects_applied.append(f"MEGA_EFFECT@{effect_start:.1f}s")
                     
                 elif any(trigger in word_upper for trigger in ['CLUTCH', 'NO WAY', 'POGGERS']):
-                    # STRONG HYPE EFFECTS
-                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.5)  # Bigger zoom
-                    video = self._add_flash_effect(video, effect_start, 0.15)  # Longer flash
+                    # HYPE EFFECTS - balanced
+                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.2)  # Subtle zoom
+                    video = self._add_flash_effect(video, effect_start, 0.08)  # Quick flash
                     effects_applied.append(f"HYPE_EFFECT@{effect_start:.1f}s")
                     
                 elif any(trigger in word_upper for trigger in ['JYNXZI', 'SHEESH']):
-                    # STRONG SHAKE for name mentions
-                    video = self._add_screen_shake(video, effect_start, effect_duration, intensity=0.3)  # Stronger shake
+                    # GENTLE SHAKE for name mentions
+                    video = self._add_screen_shake(video, effect_start, effect_duration, intensity=0.05)  # Much gentler
                     effects_applied.append(f"SHAKE@{effect_start:.1f}s")
                 
                 else:
-                    # Apply effects to ANY emphasis word for testing
-                    video = self._add_flash_effect(video, effect_start, 0.1)
-                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.3)
+                    # Apply subtle effects to ANY emphasis word for testing
+                    video = self._add_flash_effect(video, effect_start, 0.06)  # Quick flash
+                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.15)  # Subtle zoom
                     effects_applied.append(f"TEST_EFFECT@{effect_start:.1f}s")
             
             logger.info(f"✨ Applied viral effects: {', '.join(effects_applied)}")
@@ -646,6 +658,91 @@ class ClipEnhancerV2:
             logger.warning(f"⚠️ Flash effect failed: {e}")
             return video
     
+    def _apply_volume_based_effects(self, video, clip_path: Path, viral_config: Dict):
+        """Apply camera shake based on audio volume levels (rage detection)"""
+        try:
+            if not viral_config.get('volume_shake_enabled', True):
+                return video
+            
+            logger.info("🔊 Analyzing audio for rage moments...")
+            
+            # Simple approach: use the video's audio directly
+            if not hasattr(video, 'audio') or video.audio is None:
+                logger.warning("⚠️ No audio found in video, skipping volume analysis")
+                return video
+            
+            duration = video.duration
+            chunk_size = 0.5  # Larger chunks for stability (500ms)
+            volume_threshold = viral_config.get('rage_volume_threshold', 0.2)
+            shake_intensity = viral_config.get('rage_shake_intensity', 0.10)
+            
+            rage_moments = []
+            volumes_detected = []
+            
+            # Sample audio volume at larger intervals for stability
+            for t in range(int(duration / chunk_size)):
+                start_time = t * chunk_size
+                end_time = min((t + 1) * chunk_size, duration)
+                
+                try:
+                    # Get audio chunk from video
+                    chunk = video.audio.subclip(start_time, end_time)
+                    
+                    # Get audio array
+                    if hasattr(chunk, 'to_soundarray'):
+                        audio_array = chunk.to_soundarray()
+                        
+                        if len(audio_array) > 0:
+                            # Calculate RMS volume
+                            rms = np.sqrt(np.mean(audio_array**2))
+                            volume_level = min(rms * 5, 1.0)  # Scale appropriately
+                            volumes_detected.append(volume_level)
+                            
+                            # Debug logging
+                            if t % 4 == 0:  # Every 2 seconds
+                                logger.info(f"🔊 Volume at {start_time:.1f}s: {volume_level:.2f}")
+                            
+                            # Check if above threshold
+                            if volume_level > volume_threshold:
+                                rage_moments.append({
+                                    'start': start_time,
+                                    'end': end_time,
+                                    'intensity': volume_level
+                                })
+                    
+                    chunk.close()
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Audio chunk failed at {start_time:.1f}s: {str(e)[:50]}")
+                    continue
+            
+            # Log statistics
+            if volumes_detected:
+                avg_volume = sum(volumes_detected) / len(volumes_detected)
+                max_volume = max(volumes_detected)
+                logger.info(f"📊 Volume analysis: Avg {avg_volume:.2f}, Max {max_volume:.2f}, Threshold {volume_threshold}")
+                
+                if rage_moments:
+                    logger.info(f"🔥 Found {len(rage_moments)} rage moments - applying shakes!")
+                    
+                    # Apply shake effects
+                    for moment in rage_moments:
+                        intensity = shake_intensity * moment['intensity'] * 2  # Amplify effect
+                        shake_duration = min(moment['end'] - moment['start'], 0.3)  # Cap duration
+                        
+                        video = self._add_screen_shake(video, moment['start'], shake_duration, intensity=intensity)
+                        logger.info(f"🎯 Rage shake at {moment['start']:.1f}s (intensity: {intensity:.2f})")
+                else:
+                    logger.info(f"😴 No volume spikes above {volume_threshold} - try lowering threshold")
+            else:
+                logger.warning("⚠️ No volume data collected - audio analysis failed")
+            
+            return video
+            
+        except Exception as e:
+            logger.error(f"❌ Volume-based effects failed: {e}")
+            return video
+    
     def _transcribe_audio(self, clip_path: Path) -> Optional[List[Dict]]:
         """Transcribe audio using Whisper"""
         if not WHISPER_AVAILABLE:
@@ -654,8 +751,8 @@ class ClipEnhancerV2:
         
         try:
             if self.whisper_model is None:
-                logger.info("🤖 Loading Whisper model...")
-                self.whisper_model = whisper.load_model("base")
+                logger.info("🤖 Loading Whisper model (fast mode)...")
+                self.whisper_model = whisper.load_model("tiny")  # Much faster than "base"
             
             result = self.whisper_model.transcribe(str(clip_path))
             
@@ -748,10 +845,10 @@ class ClipEnhancerV2:
         viral_fonts = ['Impact', 'Arial Black', 'Trebuchet MS Bold', 'Verdana Bold', 'Arial Bold']
         outline_width = style_config.get('outline_width', 6)  # Balanced outline
         
-        # Calculate position - at bottom of gameplay section (middle of screen)
+        # Calculate position - at bottom of gameplay section (now 75% of screen)
         video_w, video_h = video_size
-        # Position at 55% down the screen (bottom of gameplay area in split-screen)
-        y_position = video_h * 0.55
+        # Position at 70% down the screen (bottom of 75% gameplay area)
+        y_position = video_h * 0.70
         
         for phrase in phrases:
             # Create phrase text with emphasis styling
@@ -1025,13 +1122,14 @@ class ClipEnhancerV2:
         crf = platform_config.get('output_crf', 18)
         preset = platform_config.get('output_preset', 'veryfast')
         
-        # Export video
+        # Export video with faster settings
         video.write_videofile(
             str(output_path),
             codec=codec,
-            preset=preset,
+            preset='ultrafast',  # Much faster encoding
             ffmpeg_params=['-crf', str(crf)],
-            audio_codec='aac'
+            audio_codec='aac',
+            threads=4  # Use multiple CPU cores
         )
         
         logger.info(f"💾 Video rendered: {output_path}")
