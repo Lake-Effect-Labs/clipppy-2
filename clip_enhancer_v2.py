@@ -364,62 +364,117 @@ class ClipEnhancerV2:
         return video, safe_zone
     
     def _detect_face_and_gameplay(self, video) -> Tuple[Optional[Tuple], Optional[Tuple]]:
-        """Detect face and main gameplay areas using OpenCV"""
+        """Detect face and main gameplay areas using improved face detection"""
         if not CV2_AVAILABLE:
             logger.warning("⚠️ OpenCV not available for face detection")
             return None, None
         
         try:
-            # Get a frame from the middle of the video for analysis
+            # Get multiple frames for better detection
             duration = video.duration
-            frame_time = duration / 2
-            frame = video.get_frame(frame_time)
+            frame_times = [duration * 0.3, duration * 0.5, duration * 0.7]  # Sample multiple points
+            best_face = None
+            best_face_size = 0
             
-            # Convert to OpenCV format
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-            
-            # Load face cascade classifier
-            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-            
-            # Detect faces
-            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50))
-            
-            if len(faces) > 0:
-                # Get the largest face (likely the streamer)
-                largest_face = max(faces, key=lambda f: f[2] * f[3])
-                fx, fy, fw, fh = largest_face
+            for frame_time in frame_times:
+                frame = video.get_frame(frame_time)
                 
-                # Expand face region for better framing (add 50% padding)
-                padding = 0.5
-                face_x1 = max(0, int(fx - fw * padding))
-                face_y1 = max(0, int(fy - fh * padding))
-                face_x2 = min(frame.shape[1], int(fx + fw * (1 + padding)))
-                face_y2 = min(frame.shape[0], int(fy + fh * (1 + padding)))
-                face_region = (face_x1, face_y1, face_x2, face_y2)
+                # Convert to OpenCV format
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
                 
-                # Define gameplay area - just use the center of the entire frame
+                # Try multiple face detection methods
+                face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+                
+                # Multiple detection passes with different parameters
+                faces_params = [
+                    {'scaleFactor': 1.1, 'minNeighbors': 5, 'minSize': (30, 30)},  # More sensitive
+                    {'scaleFactor': 1.2, 'minNeighbors': 3, 'minSize': (50, 50)},  # Default
+                    {'scaleFactor': 1.3, 'minNeighbors': 4, 'minSize': (80, 80)},  # Less sensitive
+                ]
+                
+                for params in faces_params:
+                    faces = face_cascade.detectMultiScale(gray, **params)
+                    
+                    if len(faces) > 0:
+                        # Get the largest face
+                        largest_face = max(faces, key=lambda f: f[2] * f[3])
+                        fx, fy, fw, fh = largest_face
+                        face_size = fw * fh
+                        
+                        if face_size > best_face_size:
+                            best_face = largest_face
+                            best_face_size = face_size
+                            break  # Found good face, no need to try other params
+                
+                if best_face is not None:
+                    break  # Found face, no need to check other frames
+            
+            if best_face is not None:
+                fx, fy, fw, fh = best_face
                 frame_h, frame_w = frame.shape[:2]
                 
-                # Gameplay area: center 80% of the frame (no cropping, just centered)
-                margin_x = int(frame_w * 0.1)  # 10% margin on each side
-                margin_y = int(frame_h * 0.1)  # 10% margin top/bottom
+                logger.info(f"👤 Found face at ({fx}, {fy}) size {fw}x{fh}")
                 
-                gameplay_x1 = margin_x
-                gameplay_y1 = margin_y
-                gameplay_x2 = frame_w - margin_x
-                gameplay_y2 = frame_h - margin_y
+                # For NICKMERCS-style layout: face should be on the right side typically
+                # Use the face location to determine the best crop areas
+                
+                # Face region with generous padding for full head/shoulders
+                padding = 1.2  # Even more generous padding
+                face_x1 = max(0, int(fx - fw * padding))
+                face_y1 = max(0, int(fy - fh * padding))
+                face_x2 = min(frame_w, int(fx + fw * (1 + padding)))
+                face_y2 = min(frame_h, int(fy + fh * (1 + padding)))
+                
+                # Ensure minimum face region size (at least 1/3 of frame width)
+                min_face_width = frame_w // 3
+                if (face_x2 - face_x1) < min_face_width:
+                    center_x = (face_x1 + face_x2) // 2
+                    face_x1 = max(0, center_x - min_face_width // 2)
+                    face_x2 = min(frame_w, center_x + min_face_width // 2)
+                
+                face_region = (face_x1, face_y1, face_x2, face_y2)
+                
+                # Gameplay area: try to avoid the face area
+                # If face is on the right, gameplay should focus on left/center
+                if fx > frame_w * 0.6:  # Face on right side
+                    gameplay_x1 = 0
+                    gameplay_x2 = int(frame_w * 0.8)  # Don't include full right side
+                else:  # Face on left side or center
+                    gameplay_x1 = int(frame_w * 0.2)  # Skip left portion
+                    gameplay_x2 = frame_w
+                
+                gameplay_y1 = 0
+                gameplay_y2 = frame_h
                 
                 gameplay_region = (gameplay_x1, gameplay_y1, gameplay_x2, gameplay_y2)
                 
-                logger.info(f"👤 Found face at ({fx}, {fy}) size {fw}x{fh}")
-                logger.info(f"🎮 Gameplay region: {gameplay_region}")
+                logger.info(f"🎮 Smart gameplay region: {gameplay_region} (avoiding face area)")
+                logger.info(f"👤 Enhanced face region: {face_region} with {padding}x padding")
                 
                 return face_region, gameplay_region
             
             else:
-                logger.warning("⚠️ No faces detected")
-                return None, None
+                logger.warning("⚠️ No faces detected in any frame")
+                # Return fallback regions based on typical streaming layout
+                frame_h, frame_w = frame.shape[:2]
+                
+                # Assume face is on right side (typical for most streamers)
+                face_x1 = int(frame_w * 0.6)  # Right 40% of frame
+                face_y1 = int(frame_h * 0.2)  # Skip top 20%
+                face_x2 = frame_w
+                face_y2 = int(frame_h * 0.8)  # Skip bottom 20%
+                face_region = (face_x1, face_y1, face_x2, face_y2)
+                
+                # Gameplay in left/center
+                gameplay_x1 = 0
+                gameplay_x2 = int(frame_w * 0.8)
+                gameplay_y1 = 0
+                gameplay_y2 = frame_h
+                gameplay_region = (gameplay_x1, gameplay_y1, gameplay_x2, gameplay_y2)
+                
+                logger.info(f"📺 Using fallback layout - Face: {face_region}, Gameplay: {gameplay_region}")
+                return face_region, gameplay_region
                 
         except Exception as e:
             logger.error(f"❌ Face detection failed: {e}")
@@ -982,11 +1037,19 @@ class ClipEnhancerV2:
         words = []
         for word_data in transcript:
             text = word_data['text'].upper().strip('.,!?')
-            is_emphasis = any(emphasis_word.upper() in text for emphasis_word in emphasis_map)
+            
+            # Enhanced emphasis detection - must be exact match or start of word
+            is_emphasis = False
+            for emphasis_word in emphasis_map:
+                if (text == emphasis_word.upper() or 
+                    text.startswith(emphasis_word.upper() + ' ') or
+                    ' ' + emphasis_word.upper() in ' ' + text):
+                    is_emphasis = True
+                    break
             
             # Debug logging for emphasis detection
             if is_emphasis:
-                logger.info(f"🔥 EMPHASIS DETECTED: '{word_data['text']}' matches {emphasis_map}")
+                logger.info(f"🔥 EMPHASIS DETECTED: '{word_data['text']}' matches emphasis words")
             
             word = CaptionWord(
                 text=word_data['text'],

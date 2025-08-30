@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import time
+import threading
+import queue
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple, List
@@ -83,7 +85,80 @@ class TwitchClipBot:
         # Clip enhancement
         self.enhancer = ClipEnhancer() if ClipEnhancer else None
         self.auto_enhance = self.config.get('global', {}).get('auto_enhance', True)
+        
+        # Async enhancement queue to prevent blocking monitoring
+        self.enhancement_queue = queue.Queue()
+        self.enhancement_worker = None
+        self.enhancement_running = False
     
+    def start_enhancement_worker(self):
+        """Start the background enhancement worker thread"""
+        if not self.enhancement_running:
+            self.enhancement_running = True
+            self.enhancement_worker = threading.Thread(target=self._enhancement_worker, daemon=True)
+            self.enhancement_worker.start()
+            logger.info("🔧 Started enhancement worker thread")
+    
+    def stop_enhancement_worker(self):
+        """Stop the background enhancement worker thread"""
+        if self.enhancement_running:
+            self.enhancement_running = False
+            # Add poison pill to wake up worker
+            self.enhancement_queue.put(None)
+            if self.enhancement_worker:
+                self.enhancement_worker.join(timeout=2)
+            logger.info("🛑 Stopped enhancement worker thread")
+    
+    def _enhancement_worker(self):
+        """Background worker that processes enhancement queue"""
+        logger.info("⚡ Enhancement worker started")
+        while self.enhancement_running:
+            try:
+                # Get next enhancement job (block for up to 1 second)
+                job = self.enhancement_queue.get(timeout=1)
+                
+                # Poison pill to stop worker
+                if job is None:
+                    break
+                
+                clip_url, reason = job
+                logger.info(f"🎨 Processing enhancement job: {clip_url}")
+                
+                self._process_enhancement(clip_url, reason)
+                
+                self.enhancement_queue.task_done()
+                
+            except queue.Empty:
+                continue  # Timeout, check if still running
+            except Exception as e:
+                logger.error(f"❌ Enhancement worker error: {e}")
+        
+        logger.info("🏁 Enhancement worker stopped")
+    
+    def _process_enhancement(self, clip_url: str, reason: str):
+        """Process a single enhancement job"""
+        try:
+            if self.clip_enhancer_v2:
+                # Download clip first using v1 enhancer
+                if self.clip_enhancer:
+                    clip_path = self.clip_enhancer.download_clip(clip_url)
+                    if clip_path:
+                        logger.info(f"📥 Downloaded clip for enhancement")
+                        
+                        # Enhance with v2 system using current streamer config
+                        enhanced_path, telemetry = self.clip_enhancer_v2.enhance_clip(clip_path, self.current_streamer)
+                        
+                        logger.info(f"✨ Enhanced clip saved: {enhanced_path}")
+                        logger.info(f"📊 Processing time: {telemetry.processing_time_ms}ms")
+                        logger.info(f"📊 Words rendered: {telemetry.words_rendered}")
+                        logger.info(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
+                    else:
+                        logger.warning("Failed to download clip for enhancement")
+                else:
+                    logger.warning("v1 enhancer not available for downloading")
+        except Exception as e:
+            logger.error(f"Enhancement failed for {clip_url}: {e}")
+
     def load_config(self):
         """Load configuration from YAML file"""
         try:
@@ -216,9 +291,10 @@ class TwitchClipBot:
                                 
                                 # Feed to viral detector if using advanced algorithm
                                 if self.viral_detector and self.config.get('global', {}).get('use_test_virality_alg', False):
+                                    user_id = f"user_{hash(user_info) % 1000000}"
                                     self.viral_detector.add_chat_message(
                                         username=user_info,
-                                        user_id=user_info,  # IRC doesn't provide user_id
+                                        user_id=user_id,
                                         message=chat_message
                                     )
                         except:
@@ -351,29 +427,20 @@ class TwitchClipBot:
                 if reason:
                     logger.info(f"   Reason: {reason}")
                 
-                # Auto-enhance clip if enabled - using v2 enhancer
+                # Auto-enhance clip if enabled - add to queue for non-blocking processing
                 if self.auto_enhance and self.clip_enhancer_v2:
-                    logger.info("🎨 Auto-enhancing clip with v2 system...")
                     try:
-                        # Download clip first using v1 enhancer
-                        if self.clip_enhancer:
-                            clip_path = self.clip_enhancer.download_clip(clip_url)
-                            if clip_path:
-                                logger.info(f"📥 Downloaded clip for enhancement")
-                                
-                                # Enhance with v2 system using current streamer config
-                                enhanced_path, telemetry = self.clip_enhancer_v2.enhance_clip(clip_path, self.current_streamer)
-                                
-                                logger.info(f"✨ Enhanced clip saved: {enhanced_path}")
-                                logger.info(f"📊 Processing time: {telemetry.processing_time_ms}ms")
-                                logger.info(f"📊 Words rendered: {telemetry.words_rendered}")
-                                logger.info(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
-                            else:
-                                logger.warning("Failed to download clip for enhancement")
-                        else:
-                            logger.warning("v1 enhancer not available for downloading")
+                        # Add to enhancement queue instead of blocking
+                        queue_size = self.enhancement_queue.qsize()
+                        self.enhancement_queue.put((clip_url, reason))
+                        logger.info(f"📋 Added clip to enhancement queue (position {queue_size + 1})")
+                        
+                        # Start worker if not running
+                        if not self.enhancement_running:
+                            self.start_enhancement_worker()
+                            
                     except Exception as e:
-                        logger.error(f"Auto-enhancement failed: {e}")
+                        logger.error(f"Failed to queue enhancement: {e}")
                 
                 return clip_url
             
@@ -400,6 +467,9 @@ class TwitchClipBot:
         
         broadcaster_id = self.current_streamer.get('broadcaster_id')
         logger.info(f"Starting monitoring for {broadcaster_name} (ID: {broadcaster_id})")
+        
+        # Start enhancement worker thread
+        self.start_enhancement_worker()
         
         # Start chat monitoring in background
         chat_task = asyncio.create_task(self.monitor_chat(broadcaster_name))
@@ -442,6 +512,8 @@ class TwitchClipBot:
             logger.error(f"Monitoring error: {e}")
         finally:
             chat_task.cancel()
+            # Stop enhancement worker
+            self.stop_enhancement_worker()
     
     async def start_monitoring_streamer(self, streamer_config: Dict):
         """Start monitoring a specific streamer"""

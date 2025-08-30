@@ -14,10 +14,10 @@ global:
     viewer_increase: 20
     time_window: 10
   viral_algorithm:
-    score_threshold: 1.0
-    min_unique_chatters: 30
-    cooldown_seconds: 120
-    baseline_window_minutes: 10
+    score_threshold: 1.5
+    min_unique_chatters: 50  # High threshold for truly viral moments
+    cooldown_seconds: 300
+    baseline_window_minutes: 2
     analysis_window_seconds: 15
     weights:
       chat_velocity: 0.4
@@ -58,16 +58,16 @@ enhancement_presets:
         zoom_enabled: true
         shake_enabled: true
         flash_enabled: true
-                      # Volume-based rage detection (temporarily disabled due to MoviePy compatibility)
-              volume_shake_enabled: false  # Disabled until MoviePy audio issues fixed
-              rage_volume_threshold: 0.2  # Volume level to trigger shake (0.0-1.0)
-              rage_shake_intensity: 0.10  # How strong the rage shake is
-              
-              # AI Emotion Detection - analyzes streamer face + voice for targeted effects
-              emotion_effects_enabled: true  # Enable emotion-based effects
-              hype_intensity: 1.0      # Multiplier for hype effects (zoom, shake, flash)
-              tilt_intensity: 1.0      # Multiplier for tilt effects (red tint, shake)
-              shock_intensity: 1.0     # Multiplier for shock effects (freeze, zoom)
+        # Volume-based rage detection (temporarily disabled due to MoviePy compatibility)
+        volume_shake_enabled: false  # Disabled until MoviePy audio issues fixed
+        rage_volume_threshold: 0.2  # Volume level to trigger shake (0.0-1.0)
+        rage_shake_intensity: 0.10  # How strong the rage shake is
+        
+        # AI Emotion Detection - analyzes streamer face + voice for targeted effects
+        emotion_effects_enabled: false  # Enable emotion-based effects
+        hype_intensity: 1.0      # Multiplier for hype effects (zoom, shake, flash)
+        tilt_intensity: 1.0      # Multiplier for tilt effects (red tint, shake)
+        shock_intensity: 1.0     # Multiplier for shock effects (freeze, zoom)
       profanity_filter: pg
       style:
         font_family: Montserrat ExtraBold
@@ -179,11 +179,16 @@ streamers:
 - name: jynxzi
   twitch_username: jynxzi
   broadcaster_id: '411377640'
-  enabled: true
+  enabled: true  # Enabled for dual monitoring
   thresholds:
     chat_spike: 50.0
     viewer_increase: 15.0
     time_window: 10
+  viral_algorithm:
+    score_threshold: 0.4  # Set to 0.4 as requested
+    min_unique_chatters: 30  # More achievable
+    cooldown_seconds: 300
+    baseline_window_minutes: 2
   tiktok_account:
     username: jynxzi_clippy
     max_posts_per_day: 3
@@ -202,11 +207,15 @@ streamers:
       captions:
         enabled: true
         emphasis_map:
-        - INSANE
+        - LETS GO
         - CLUTCH
-        - NO WAY
+        - NO SHOT
         - POGGERS
-        - WTF
+        - OH MY GOD
+        - WHAT THE
+        - SHEESH
+        - CRAZY
+        - BRO
         - JYNXZI
       branding:
         watermark:
@@ -220,6 +229,174 @@ streamers:
           enabled: true
         attribution:
           enabled: true
+
+- name: nickmercs
+  twitch_username: nickmercs
+  broadcaster_id: '15564828'  # NICKMERCS correct Twitch ID
+  enabled: true  # ENABLED - testing with correct ID
+  thresholds:
+    chat_spike: 75.0  # Higher threshold for big streamer
+    viewer_increase: 20.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.4  # Very low for smaller streamer
+    min_unique_chatters: 10  # Very achievable
+    cooldown_seconds: 300
+    baseline_window_minutes: 2
+  tiktok_account:
+    username: nickmercs_clippy
+    max_posts_per_day: 5
+    posting_hours:
+      start: 12  # Earlier for US audience
+      end: 23
+    hashtags:
+    - '#nickmercs'
+    - '#cod'
+    - '#warzone'
+    - '#gaming'
+    - '#viral'
+    - '#fyp'
+    - '#mfam'
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - LETS GO
+        - CLUTCH
+        - NO SHOT
+        - OH MY GOD
+        - WHAT THE
+        - SHEESH
+        - BRO
+        - MFAM
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@nickmercs_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: nadeshot
+  twitch_username: nadeshot
+  broadcaster_id: '21130533'  # Nadeshot Twitch ID
+  enabled: true  # ENABLED for triple monitoring test
+  thresholds:
+    chat_spike: 60.0  # Medium threshold
+    viewer_increase: 18.0
+    time_window: 12
+  viral_algorithm:
+    score_threshold: 0.5  # Lower for medium streamer
+    min_unique_chatters: 15  # More achievable
+    cooldown_seconds: 300
+    baseline_window_minutes: 2
+  tiktok_account:
+    username: nadeshot_clippy
+    max_posts_per_day: 4
+    posting_hours:
+      start: 13  # US afternoon/evening
+      end: 23
+    hashtags:
+    - '#nadeshot'
+    - '#100thieves'
+    - '#valorant'
+    - '#gaming'
+    - '#viral'
+    - '#fyp'
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - LETS GO
+        - CLUTCH
+        - NO SHOT
+        - OH MY GOD
+        - WHAT THE
+        - SHEESH
+        - BRO
+        - NADESHOT
+        - 100T
+        - INSANE
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@nadeshot_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: xqc
+  twitch_username: xqc
+  broadcaster_id: '71092938'  # xQc Twitch ID
+  enabled: true  # ENABLED for quad monitoring test
+  thresholds:
+    chat_spike: 80.0  # High threshold for massive streamer
+    viewer_increase: 25.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.7  # Lower for big streamer
+    min_unique_chatters: 50  # More reasonable for testing
+    cooldown_seconds: 300
+    baseline_window_minutes: 2
+  tiktok_account:
+    username: xqc_clippy
+    max_posts_per_day: 5
+    posting_hours:
+      start: 12  # All day for international audience
+      end: 23
+    hashtags:
+    - '#xqc'
+    - '#gaming'
+    - '#react'
+    - '#twitch'
+    - '#viral'
+    - '#fyp'
+    - '#juicer'
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - LETS GO
+        - POGGERS
+        - NO SHOT
+        - OH MY GOD
+        - WHAT THE
+        - SHEESH
+        - BRO
+        - XQC
+        - JUICER
+        - CHAT
+        - DUDE
+        - INSANE
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@xqc_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
 - name: shroud
   twitch_username: shroud
   broadcaster_id: '37402112'

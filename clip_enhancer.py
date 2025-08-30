@@ -98,36 +98,145 @@ class ClipEnhancer:
         }
         
     def download_clip(self, clip_url: str) -> Optional[Path]:
-        """Download a Twitch clip video file"""
+        """Download a Twitch clip video file using direct API approach"""
         try:
+            logger.info(f"📥 Attempting to download: {clip_url}")
+            
             # Convert clip URL to download URL
             if '/edit' in clip_url:
                 clip_url = clip_url.replace('/edit', '')
+                logger.info(f"📝 Cleaned URL: {clip_url}")
             
             # Extract clip ID from URL
-            clip_id = clip_url.split('/')[-1]
+            url_parts = clip_url.split('/')
+            if len(url_parts) < 2:
+                logger.error(f"❌ Invalid URL format: {clip_url}")
+                return None
             
-            # Use yt-dlp to download (more reliable than Twitch API for video files)
+            clip_id = url_parts[-1]
+            if not clip_id or len(clip_id) < 10:  # Twitch clip IDs are much longer
+                logger.error(f"❌ Could not extract clip ID from: {clip_url}")
+                return None
+                
+            logger.info(f"🆔 Extracted clip ID: {clip_id}")
+            
+            # Try direct Twitch API approach first
+            video_url = self._get_clip_video_url_from_api(clip_id)
+            if video_url:
+                logger.info(f"🎯 Got video URL from Twitch API: {video_url[:50]}...")
+                return self._download_from_direct_url(video_url, clip_id)
+            
+            # Fallback to yt-dlp if API approach fails
+            logger.warning("🔄 API approach failed, trying yt-dlp fallback...")
+            return self._download_with_ytdlp(clip_url, clip_id)
+            
+        except Exception as e:
+            logger.error(f"❌ Error downloading clip: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+    
+    def _get_clip_video_url_from_api(self, clip_id: str) -> Optional[str]:
+        """Get direct video URL from Twitch API"""
+        try:
+            # Get Twitch credentials
+            client_id = os.getenv('TWITCH_CLIENT_ID')
+            client_secret = os.getenv('TWITCH_CLIENT_SECRET')
+            oauth_token = os.getenv('TWITCH_OAUTH_TOKEN')
+            
+            if not client_id or not client_secret:
+                logger.warning("⚠️ Missing Twitch credentials, skipping API approach")
+                return None
+            
+            # Get access token
+            access_token = oauth_token
+            if not access_token:
+                # Use client credentials
+                auth_url = "https://id.twitch.tv/oauth2/token"
+                auth_data = {
+                    'client_id': client_id,
+                    'client_secret': client_secret,
+                    'grant_type': 'client_credentials'
+                }
+                auth_response = requests.post(auth_url, data=auth_data, timeout=10)
+                auth_response.raise_for_status()
+                access_token = auth_response.json()['access_token']
+            
+            # Get clip details from Twitch API
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Client-Id': client_id
+            }
+            
+            url = f"https://api.twitch.tv/helix/clips?id={clip_id}"
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            if not data.get('data'):
+                logger.warning(f"⚠️ No clip data found for ID: {clip_id}")
+                return None
+            
+            clip_data = data['data'][0]
+            video_url = clip_data.get('video_url') or clip_data.get('thumbnail_url', '').replace('-preview-480x272.jpg', '.mp4')
+            
+            if video_url and video_url.endswith('.mp4'):
+                logger.info(f"✅ Found direct video URL from API")
+                return video_url
+            
+            logger.warning(f"⚠️ No direct video URL found in clip data")
+            return None
+            
+        except requests.RequestException as e:
+            logger.warning(f"⚠️ API request failed: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ API approach error: {e}")
+            return None
+    
+    def _download_from_direct_url(self, video_url: str, clip_id: str) -> Optional[Path]:
+        """Download video from direct URL"""
+        try:
             output_path = self.temp_dir / f"{clip_id}.mp4"
             
-            cmd = [
-                'yt-dlp',
-                '--format', 'best[ext=mp4]',
-                '--output', str(output_path),
-                clip_url
-            ]
+            logger.info(f"🌐 Downloading from direct URL...")
+            response = requests.get(video_url, stream=True, timeout=30)
+            response.raise_for_status()
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
             
-            if result.returncode == 0 and output_path.exists():
-                logger.info(f"✅ Downloaded clip: {output_path}")
+            if output_path.exists() and output_path.stat().st_size > 0:
+                logger.info(f"✅ Downloaded clip via API: {output_path}")
                 return output_path
             else:
-                logger.error(f"Failed to download clip: {result.stderr}")
+                logger.error(f"❌ Downloaded file is empty or missing")
                 return None
                 
         except Exception as e:
-            logger.error(f"Error downloading clip: {e}")
+            logger.error(f"❌ Direct download failed: {e}")
+            return None
+    
+    def _download_with_ytdlp(self, clip_url: str, clip_id: str) -> Optional[Path]:
+        """Fallback yt-dlp download method"""
+        try:
+            output_path = self.temp_dir / f"{clip_id}.mp4"
+            cmd = ['yt-dlp', '--no-check-formats', '--output', str(output_path), clip_url]
+            logger.info(f"🔧 Fallback yt-dlp: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0 and output_path.exists():
+                logger.info(f"✅ Downloaded clip via yt-dlp fallback: {output_path}")
+                return output_path
+            else:
+                logger.error(f"❌ yt-dlp fallback also failed")
+                logger.error(f"❌ Error: {result.stderr[:300]}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ yt-dlp fallback error: {e}")
             return None
     
     def generate_viral_text(self, context: str = "") -> str:

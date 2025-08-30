@@ -13,3 +13,6 @@ streamers:
   - name: KaiCenat
     twitch_id: 67890
     tiktok_account: kai.clippy
+  - name: NICKMERCS
+    twitch_id: 15564828  # NICKMERCS correct Twitch ID  
+    tiktok_account: nickmercs.clippy

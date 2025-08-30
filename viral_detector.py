@@ -50,12 +50,18 @@ class ViralDetector:
         self.config = config
         self.current_streamer = None
         
-        # Algorithm configuration
+        # Algorithm configuration (defaults from global)
         alg_config = config.get('global', {}).get('viral_algorithm', {})
-        self.score_threshold = alg_config.get('score_threshold', 1.0)
-        self.min_unique_chatters = alg_config.get('min_unique_chatters', 30)
-        self.cooldown_seconds = alg_config.get('cooldown_seconds', 120)
-        self.baseline_window_minutes = alg_config.get('baseline_window_minutes', 10)
+        self.default_score_threshold = alg_config.get('score_threshold', 1.0)
+        self.default_min_unique_chatters = alg_config.get('min_unique_chatters', 30)
+        self.default_cooldown_seconds = alg_config.get('cooldown_seconds', 120)
+        self.default_baseline_window_minutes = alg_config.get('baseline_window_minutes', 10)
+        
+        # Set initial values (will be overridden by configure_for_streamer)
+        self.score_threshold = self.default_score_threshold
+        self.min_unique_chatters = self.default_min_unique_chatters
+        self.cooldown_seconds = self.default_cooldown_seconds
+        self.baseline_window_minutes = self.default_baseline_window_minutes
         self.analysis_window_seconds = alg_config.get('analysis_window_seconds', 15)
         
         # Scoring weights
@@ -76,16 +82,126 @@ class ViralDetector:
         self.baseline_mps = 0.0
         self.baseline_fpm = 0.0
         self.stream_start_time = None
-        self.is_live = False
         
-        # EventSub connection
-        self.eventsub_session_id = None
-        self.eventsub_websocket = None
+        # Adaptive threshold system
+        self.original_threshold = None  # Store original threshold
+        self.clips_created_today = 0
+        self.daily_clip_target = 5  # Target clips per day
+        self.last_threshold_check = 0
+        self.threshold_check_interval = 1800  # Check every 30 minutes (1800 seconds)
+        
+        # Stream status
+        self.is_live = False
+    
+    def configure_for_streamer(self, streamer_name: str):
+        """Configure algorithm settings for specific streamer"""
+        self.current_streamer = streamer_name
+        
+        # Find streamer config
+        streamer_config = None
+        for streamer in self.config.get('streamers', []):
+            if streamer.get('name') == streamer_name:
+                streamer_config = streamer
+                break
+        
+        if streamer_config and 'viral_algorithm' in streamer_config:
+            # Use streamer-specific settings
+            alg_config = streamer_config['viral_algorithm']
+            self.score_threshold = alg_config.get('score_threshold', self.default_score_threshold)
+            self.original_threshold = self.score_threshold  # Store original for adaptive system
+            self.min_unique_chatters = alg_config.get('min_unique_chatters', self.default_min_unique_chatters)
+            self.cooldown_seconds = alg_config.get('cooldown_seconds', self.default_cooldown_seconds)
+            self.baseline_window_minutes = alg_config.get('baseline_window_minutes', self.default_baseline_window_minutes)
+            
+            logger.info(f"🎯 Viral detector configured for {streamer_name}")
+            logger.info(f"   Score threshold: {self.score_threshold} (adaptive system enabled)")
+            logger.info(f"   Min unique chatters: {self.min_unique_chatters}")
+            logger.info(f"   Cooldown: {self.cooldown_seconds}s")
+            logger.info(f"   Daily clip target: {self.daily_clip_target}")
+        else:
+            # Use defaults
+            self.score_threshold = self.default_score_threshold
+            self.min_unique_chatters = self.default_min_unique_chatters
+            self.cooldown_seconds = self.default_cooldown_seconds
+            self.baseline_window_minutes = self.default_baseline_window_minutes
+            logger.info(f"🎯 Viral detector using default settings for {streamer_name}")
+        
+        # Reset stream state for new streamer
+        self.stream_start_time = None
+        self.last_clip_time = 0
+        self.baseline_mps = 0.0
+        self.baseline_fpm = 0.0
+        self.chat_messages.clear()
+        self.engagement_events.clear()
+        self.viewer_history.clear()
+        self.follow_events.clear()
+    
+    def adjust_adaptive_threshold(self):
+        """Adjust threshold based on stream progress and clip count to guarantee daily target"""
+        if not self.stream_start_time or not self.original_threshold:
+            return
+        
+        current_time = time.time()
+        
+        # Only check every 30 minutes to avoid constant adjustments
+        if current_time - self.last_threshold_check < self.threshold_check_interval:
+            return
+            
+        self.last_threshold_check = current_time
+        
+        # Calculate stream progress (hours since start)
+        stream_hours = (current_time - self.stream_start_time) / 3600
+        
+        # Estimate expected stream duration (assume 6-8 hour streams on average)
+        estimated_stream_duration = 7.0  # hours
+        stream_progress = min(stream_hours / estimated_stream_duration, 1.0)
+        
+        # Calculate expected clips by this point
+        expected_clips = self.daily_clip_target * stream_progress
+        clips_deficit = expected_clips - self.clips_created_today
+        
+        # Calculate threshold adjustment based on deficit
+        if clips_deficit > 1.0:  # We're behind by more than 1 clip
+            # Lower threshold to get more clips (more aggressive)
+            adjustment_factor = max(0.5, 1.0 - (clips_deficit * 0.15))  # Lower by up to 50%
+            new_threshold = self.original_threshold * adjustment_factor
+            
+            logger.info(f"📉 ADAPTIVE: Behind on clips ({self.clips_created_today}/{expected_clips:.1f})")
+            logger.info(f"📉 ADAPTIVE: Lowering threshold {self.score_threshold:.3f} → {new_threshold:.3f}")
+            
+        elif clips_deficit < -0.5:  # We're ahead by more than 0.5 clips
+            # Raise threshold to be more selective (less aggressive)
+            adjustment_factor = min(1.5, 1.0 + (abs(clips_deficit) * 0.1))  # Raise by up to 50%
+            new_threshold = self.original_threshold * adjustment_factor
+            
+            logger.info(f"📈 ADAPTIVE: Ahead on clips ({self.clips_created_today}/{expected_clips:.1f})")
+            logger.info(f"📈 ADAPTIVE: Raising threshold {self.score_threshold:.3f} → {new_threshold:.3f}")
+            
+        else:
+            # We're on track, no adjustment needed
+            new_threshold = self.score_threshold
+            logger.info(f"✅ ADAPTIVE: On track ({self.clips_created_today}/{expected_clips:.1f} clips after {stream_hours:.1f}h)")
+            return
+        
+        # Apply the new threshold with bounds checking
+        self.score_threshold = max(0.1, min(2.0, new_threshold))  # Keep between 0.1 and 2.0
+        
+        logger.info(f"🎯 ADAPTIVE: Stream progress: {stream_progress*100:.1f}% ({stream_hours:.1f}h)")
+        logger.info(f"🎯 ADAPTIVE: Current clips: {self.clips_created_today}/{self.daily_clip_target}")
+        logger.info(f"🎯 ADAPTIVE: New threshold: {self.score_threshold:.3f}")
+    
+    def record_clip_created(self):
+        """Record that a clip was created for adaptive threshold tracking"""
+        self.clips_created_today += 1
+        logger.info(f"📊 ADAPTIVE: Clip #{self.clips_created_today} created (target: {self.daily_clip_target})")
+        
+        # Check if we should adjust threshold after clip creation
+        self.adjust_adaptive_threshold()
         
     def set_current_streamer(self, streamer_config: Dict):
         """Set the current streamer configuration"""
-        self.current_streamer = streamer_config
-        logger.info(f"🎯 Viral detector configured for {streamer_config.get('name')}")
+        streamer_name = streamer_config.get('name')
+        self.configure_for_streamer(streamer_name)
     
     def add_chat_message(self, username: str, user_id: str, message: str, is_first_message: bool = False):
         """Add a chat message to analysis"""
@@ -147,7 +263,8 @@ class ViralDetector:
         mps = len(recent_messages) / window_seconds
         
         # Count unique chatters
-        unique_chatters = len(set(msg.user_id for msg in recent_messages))
+        unique_user_ids = set(msg.user_id for msg in recent_messages)
+        unique_chatters = len(unique_user_ids)
         
         return mps, unique_chatters
     
@@ -248,12 +365,14 @@ class ViralDetector:
     
     def calculate_viral_score(self) -> Tuple[float, Dict]:
         """Calculate the viral moment score and component breakdown"""
+        # Always calculate current MPS and unique chatters for monitoring
+        current_mps, unique_chatters = self.calculate_messages_per_second(self.analysis_window_seconds)
+        
         # Skip if stream just started (need baseline)
         if self.stream_start_time and (time.time() - self.stream_start_time) < (self.baseline_window_minutes * 60):  # Use config value
-            return 0.0, {"reason": "building_baseline"}
+            return 0.0, {"reason": "building_baseline", "unique_chatters": unique_chatters, "current_mps": current_mps}
         
         # 1. Chat velocity component
-        current_mps, unique_chatters = self.calculate_messages_per_second(self.analysis_window_seconds)
         baseline_mps = self.calculate_baseline_mps()
         mps_zscore = self.calculate_chat_zscore(current_mps, baseline_mps)
         chat_component = self.weight_chat * min(max(mps_zscore / 2.5, 0), 1)
@@ -296,12 +415,21 @@ class ViralDetector:
         """Determine if a clip should be created based on viral score"""
         current_time = time.time()
         
+        # Run adaptive threshold adjustment (checks every 30 minutes automatically)
+        self.adjust_adaptive_threshold()
+        
         # Check cooldown
         if current_time - self.last_clip_time < self.cooldown_seconds:
             return False, f"Cooldown active ({self.cooldown_seconds}s)", {}
         
         # Calculate viral score
         score, breakdown = self.calculate_viral_score()
+        
+        # Add adaptive threshold info to breakdown
+        breakdown['adaptive_threshold'] = self.score_threshold
+        breakdown['original_threshold'] = self.original_threshold or self.score_threshold
+        breakdown['clips_today'] = self.clips_created_today
+        breakdown['clip_target'] = self.daily_clip_target
         
         # Debug logging
         logger.info(f"🧪 Viral Debug - Score: {score:.3f}, Breakdown: {breakdown}")
@@ -316,6 +444,9 @@ class ViralDetector:
         # Check if score meets threshold
         if score >= self.score_threshold:
             self.last_clip_time = current_time
+            
+            # Record clip creation for adaptive system
+            self.record_clip_created()
             
             reason = f"Viral score: {score:.3f} (threshold: {self.score_threshold})"
             if breakdown.get("chat_component", 0) > 0.3:
