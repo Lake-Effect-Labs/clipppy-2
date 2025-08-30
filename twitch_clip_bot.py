@@ -90,6 +90,10 @@ class TwitchClipBot:
         self.enhancement_queue = queue.Queue()
         self.enhancement_worker = None
         self.enhancement_running = False
+        
+        # Always-on mode integration
+        self.always_on_mode = False
+        self.controller_enhancement_queue = None
     
     def start_enhancement_worker(self):
         """Start the background enhancement worker thread"""
@@ -547,7 +551,8 @@ def cli():
 
 @cli.command()
 @click.option('--streamer', help='Specific streamer to monitor (default: all enabled)')
-def start(streamer):
+@click.option('--always-on-mode', is_flag=True, help='Run in always-on mode (managed by controller)')
+def start(streamer, always_on_mode):
     """Start monitoring streamers for clip opportunities"""
     try:
         bot = TwitchClipBot()
@@ -561,6 +566,13 @@ def start(streamer):
             if not streamer_config.get('enabled', False):
                 click.echo(f"❌ Streamer '{streamer}' is disabled in config")
                 return
+            
+            if always_on_mode:
+                click.echo(f"🤖 Starting always-on listener for {streamer}")
+                bot.always_on_mode = True
+            else:
+                click.echo(f"🎯 Starting standalone monitoring for {streamer}")
+                bot.always_on_mode = False
             
             asyncio.run(bot.start_monitoring_streamer(streamer_config))
         else:

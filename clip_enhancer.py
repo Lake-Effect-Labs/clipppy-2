@@ -137,7 +137,9 @@ class ClipEnhancer:
             return None
     
     def _get_clip_video_url_from_api(self, clip_id: str) -> Optional[str]:
-        """Get direct video URL from Twitch API"""
+        """Get direct video URL from Twitch API with retry logic"""
+        import time
+        
         try:
             # Get Twitch credentials
             client_id = os.getenv('TWITCH_CLIENT_ID')
@@ -162,34 +164,93 @@ class ClipEnhancer:
                 auth_response.raise_for_status()
                 access_token = auth_response.json()['access_token']
             
-            # Get clip details from Twitch API
+            # Get clip details from Twitch API with retries (clips need time to process)
             headers = {
                 'Authorization': f'Bearer {access_token}',
                 'Client-Id': client_id
             }
             
-            url = f"https://api.twitch.tv/helix/clips?id={clip_id}"
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    if attempt > 0:
+                        wait_time = 5 + (attempt * 5)  # Wait 5, 10, 15 seconds
+                        logger.info(f"🔄 Waiting {wait_time}s for clip to be processed (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                    
+                    url = f"https://api.twitch.tv/helix/clips?id={clip_id}"
+                    response = requests.get(url, headers=headers, timeout=15)
+                    response.raise_for_status()
+                    
+                    data = response.json()
+                    if not data.get('data'):
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️ Clip not found yet, retrying... (attempt {attempt + 1}/{max_retries})")
+                            continue
+                        else:
+                            logger.warning(f"⚠️ No clip data found for ID: {clip_id} after {max_retries} attempts")
+                            return None
+                    
+                    clip_data = data['data'][0]
+                    
+                    # Try multiple URL sources and test them
+                    video_urls_to_try = []
+                    
+                    # Method 1: Direct video_url field
+                    if clip_data.get('video_url'):
+                        video_urls_to_try.append(("direct_field", clip_data['video_url']))
+                        
+                    # Method 2: Construct from thumbnail URL (multiple variants)
+                    if clip_data.get('thumbnail_url'):
+                        thumbnail = clip_data['thumbnail_url']
+                        logger.info(f"🔗 Thumbnail URL: {thumbnail}")
+                        
+                        # Try different construction methods
+                        if 'preview-' in thumbnail and '.jpg' in thumbnail:
+                            # Method 2a: Replace preview with AT-cm
+                            url1 = thumbnail.replace('-preview-480x272.jpg', '-AT-cm.mp4')
+                            video_urls_to_try.append(("thumbnail_AT_cm", url1))
+                            
+                            # Method 2b: Replace preview completely  
+                            url2 = thumbnail.replace('-preview-480x272.jpg', '.mp4').replace('preview-', '')
+                            video_urls_to_try.append(("thumbnail_clean", url2))
+                            
+                            # Method 2c: Different resolution markers
+                            url3 = thumbnail.replace('-preview-480x272.jpg', '-480.mp4')
+                            video_urls_to_try.append(("thumbnail_480", url3))
+                    
+                    # Test each URL to see if it works
+                    for method, video_url in video_urls_to_try:
+                        logger.info(f"🧪 Testing {method}: {video_url[:70]}...")
+                        
+                        try:
+                            # Quick HEAD request to test if URL exists
+                            test_response = requests.head(video_url, timeout=5)
+                            if test_response.status_code == 200:
+                                logger.info(f"✅ Found working video URL via {method}")
+                                return video_url
+                            else:
+                                logger.info(f"❌ {method} returned {test_response.status_code}")
+                        except:
+                            logger.info(f"❌ {method} failed connection test")
+                    
+                    # If we get here, no URLs worked
+                    logger.warning(f"⚠️ No working video URLs found")
+                    logger.info(f"📊 Available fields: {list(clip_data.keys())}")
+                    if attempt < max_retries - 1:
+                        continue
+                    return None
+                        
+                except requests.RequestException as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ API request failed (attempt {attempt + 1}), retrying: {e}")
+                        continue
+                    else:
+                        logger.warning(f"⚠️ API request failed after {max_retries} attempts: {e}")
+                        return None
             
-            data = response.json()
-            if not data.get('data'):
-                logger.warning(f"⚠️ No clip data found for ID: {clip_id}")
-                return None
-            
-            clip_data = data['data'][0]
-            video_url = clip_data.get('video_url') or clip_data.get('thumbnail_url', '').replace('-preview-480x272.jpg', '.mp4')
-            
-            if video_url and video_url.endswith('.mp4'):
-                logger.info(f"✅ Found direct video URL from API")
-                return video_url
-            
-            logger.warning(f"⚠️ No direct video URL found in clip data")
             return None
             
-        except requests.RequestException as e:
-            logger.warning(f"⚠️ API request failed: {e}")
-            return None
         except Exception as e:
             logger.warning(f"⚠️ API approach error: {e}")
             return None

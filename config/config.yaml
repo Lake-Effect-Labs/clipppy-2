@@ -1,8 +1,20 @@
 twitch: null
 tiktok:
-  api_key: your_tiktok_api_key
-  api_secret: your_tiktok_api_secret
-  access_token: your_tiktok_access_token
+  # Centralized TikTok account for all streamers
+  main_account:
+    username: clipppy_main
+    api_key: your_tiktok_api_key
+    api_secret: your_tiktok_api_secret
+    access_token: your_tiktok_access_token
+    max_posts_per_day: 20  # Higher limit for multi-streamer content
+    posting_hours:
+      start: 12  # 12 PM
+      end: 24   # 12 AM (prime TikTok hours)
+  
+  # Auto-posting settings
+  auto_post: true
+  post_delay_minutes: 15  # Minimum time between posts
+  caption_template: "{phrase}\n\nCredit: @{streamer}\n\n{hashtags}"
 global:
   max_clips_per_day: 5
   monitoring_interval: 30
@@ -179,7 +191,7 @@ streamers:
 - name: jynxzi
   twitch_username: jynxzi
   broadcaster_id: '411377640'
-  enabled: true  # Enabled for dual monitoring
+  enabled: true  # ENABLED for always-on system
   thresholds:
     chat_spike: 50.0
     viewer_increase: 15.0
@@ -233,7 +245,7 @@ streamers:
 - name: nickmercs
   twitch_username: nickmercs
   broadcaster_id: '15564828'  # NICKMERCS correct Twitch ID
-  enabled: true  # ENABLED - testing with correct ID
+  enabled: true  # ENABLED for always-on system
   thresholds:
     chat_spike: 75.0  # Higher threshold for big streamer
     viewer_increase: 20.0
@@ -287,7 +299,7 @@ streamers:
 - name: nadeshot
   twitch_username: nadeshot
   broadcaster_id: '21130533'  # Nadeshot Twitch ID
-  enabled: true  # ENABLED for triple monitoring test
+  enabled: true  # ENABLED for always-on system
   thresholds:
     chat_spike: 60.0  # Medium threshold
     viewer_increase: 18.0
@@ -342,7 +354,7 @@ streamers:
 - name: xqc
   twitch_username: xqc
   broadcaster_id: '71092938'  # xQc Twitch ID
-  enabled: true  # ENABLED for quad monitoring test
+  enabled: true  # ENABLED for always-on system
   thresholds:
     chat_spike: 80.0  # High threshold for massive streamer
     viewer_increase: 25.0
@@ -388,6 +400,292 @@ streamers:
         watermark:
           enabled: true
           handle_text: '@xqc_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: theburntpeanut
+  twitch_username: theburntpeanut
+  broadcaster_id: '472066926'  # theburntpeanut Twitch ID
+  enabled: true  # ENABLED - focusing only on this streamer
+  thresholds:
+    chat_spike: 20.0  # Lower threshold for smaller streamer
+    viewer_increase: 25.0
+    time_window: 12
+  viral_algorithm:
+    score_threshold: 0.3  # Lower threshold for more clips
+    min_unique_chatters: 15  # Achievable for smaller stream
+    cooldown_seconds: 180   # 3 minutes between clips
+    baseline_window_minutes: 2
+  tiktok_account:
+    username: theburntpeanut_clippy
+    max_posts_per_day: 5
+    posting_hours:
+      start: 14
+      end: 22
+    hashtags:
+    - '#theburntpeanut'
+    - '#gaming'
+    - '#twitch'
+    - '#viral'
+    - '#fyp'
+    - '#clips'
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - CLUTCH
+        - POGGERS
+        - SHEESH
+        - WTF
+        - THEBURNTPEANUT
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@theburntpeanut_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: lacy
+  twitch_username: lacy
+  broadcaster_id: '494543675'  # Lacy Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 40.0  # Medium threshold
+    viewer_increase: 20.0
+    time_window: 12
+  viral_algorithm:
+    score_threshold: 0.5  # Balanced threshold
+    min_unique_chatters: 25
+    cooldown_seconds: 240   # 4 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - CLUTCH
+        - POGGERS
+        - SHEESH
+        - WTF
+        - LACY
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@lacy_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: caseoh_
+  twitch_username: caseoh_
+  broadcaster_id: '267160288'  # CaseOh Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 50.0  # Higher threshold for big streamer
+    viewer_increase: 25.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.6  # Higher threshold for popular streamer
+    min_unique_chatters: 30
+    cooldown_seconds: 300   # 5 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - BRUH
+        - CASE
+        - CHAT
+        - WTF
+        - CASEOH
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@caseoh_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: agent00
+  twitch_username: agent00
+  broadcaster_id: '90222258'  # Agent00 Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 45.0  # Medium-high threshold
+    viewer_increase: 22.0
+    time_window: 12
+  viral_algorithm:
+    score_threshold: 0.5  # Balanced threshold
+    min_unique_chatters: 25
+    cooldown_seconds: 240   # 4 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - CLUTCH
+        - AGENT
+        - YO
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@agent00_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: stableronaldo
+  twitch_username: stableronaldo
+  broadcaster_id: '246450563'  # StableRonaldo Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 40.0  # Medium threshold
+    viewer_increase: 20.0
+    time_window: 12
+  viral_algorithm:
+    score_threshold: 0.5  # Balanced threshold
+    min_unique_chatters: 25
+    cooldown_seconds: 240   # 4 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - RONALDO
+        - STABLE
+        - YO
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@stableronaldo_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: timthetatman
+  twitch_username: timthetatman
+  broadcaster_id: '36769016'  # TimTheTatman Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 60.0  # Higher threshold for massive streamer
+    viewer_increase: 25.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.7  # Higher threshold for huge streamer
+    min_unique_chatters: 40
+    cooldown_seconds: 300   # 5 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - TIM
+        - TATMAN
+        - DUDE
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@timthetatman_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: asmongold
+  twitch_username: asmongold
+  broadcaster_id: '26261471'  # Asmongold Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 70.0  # Very high threshold for massive streamer
+    viewer_increase: 30.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.8  # High threshold for huge streamer
+    min_unique_chatters: 50
+    cooldown_seconds: 360   # 6 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - ASMON
+        - DUDE
+        - CHAT
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@asmongold_clippy'
         border:
           enabled: true
         vignette:
