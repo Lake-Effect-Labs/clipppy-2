@@ -181,12 +181,15 @@ class AlwaysOnController:
             return False
     
     def spawn_listener(self, streamer_name: str):
-        """Spawn a listener process for a live streamer"""
+        """Spawn a listener process for a live streamer in a new PowerShell window"""
         try:
+            # Create PowerShell command to open new window with the listener
+            ps_cmd = f"cd '{os.getcwd()}'; python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode"
+            
+            # Use Start-Process to create a new visible PowerShell window
             cmd = [
-                'python', 'twitch_clip_bot.py', 'start', 
-                '--streamer', streamer_name,
-                '--always-on-mode'  # New flag for always-on integration
+                'powershell', '-Command',
+                f"Start-Process powershell -ArgumentList '-NoExit', '-Command', \"{ps_cmd}\""
             ]
             
             process = subprocess.Popen(
@@ -194,11 +197,16 @@ class AlwaysOnController:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                cwd=os.getcwd()
+                cwd=os.getcwd(),
+                creationflags=subprocess.CREATE_NEW_CONSOLE if hasattr(subprocess, 'CREATE_NEW_CONSOLE') else 0
             )
             
+            # Give it a moment to start
+            import time
+            time.sleep(2)
+            
             self.streamer_status[streamer_name].listener_process = process
-            logger.info(f"🚀 Spawned listener for {streamer_name} (PID: {process.pid})")
+            logger.info(f"🚀 Spawned visible PowerShell listener for {streamer_name} (PID: {process.pid})")
             
         except Exception as e:
             logger.error(f"❌ Failed to spawn listener for {streamer_name}: {e}")
@@ -462,9 +470,16 @@ class AlwaysOnController:
                 
                 # Wait for next check
                 logger.info(f"⏰ Next check in {self.check_interval} seconds...")
-                await asyncio.sleep(self.check_interval)
+                
+                # Use shorter sleep intervals to make shutdown more responsive
+                for i in range(self.check_interval):
+                    if not self.running:
+                        break
+                    await asyncio.sleep(1)
                 
         except KeyboardInterrupt:
+            logger.info("🛑 Shutdown requested")
+        except asyncio.CancelledError:
             logger.info("🛑 Shutdown requested")
         finally:
             await self.shutdown()
@@ -488,8 +503,14 @@ class AlwaysOnController:
 
 def main():
     """Main entry point"""
-    controller = AlwaysOnController()
-    asyncio.run(controller.run())
+    try:
+        controller = AlwaysOnController()
+        asyncio.run(controller.run())
+    except KeyboardInterrupt:
+        logger.info("🛑 Shutdown requested by user")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {e}")
+        raise
 
 if __name__ == "__main__":
     main()

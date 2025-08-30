@@ -238,14 +238,31 @@ class ClipEnhancerV2:
             video = mp.VideoFileClip(str(clip_path))
             original_duration = video.duration
             
+            # Check for IRL content before format & framing
+            logger.info("🔍 Checking content type...")
+            transcript_text = None
+            if config.get('captions', {}).get('enabled', True):
+                # Get transcript for both IRL detection and captions
+                transcript = self._transcribe_audio(clip_path)
+                if transcript:
+                    transcript_text = ' '.join([word['text'] for word in transcript])
+            
+            # Detect IRL content and adjust split-screen accordingly
+            is_irl = self._detect_irl_content(clip_path, transcript_text)
+            if is_irl:
+                # Disable split-screen for IRL content
+                config['format']['split_screen'] = False
+                logger.info("🗣️ IRL content detected - disabling split-screen layout")
+            
             # Story A: Format & Framing
             logger.info("📐 Applying format & framing...")
             video, safe_zone = self._apply_format_framing(video, config.get('format', {}))
             
             # Story B: Captions & Copy
             logger.info("📝 Adding captions...")
-            if config.get('captions', {}).get('enabled', True):
-                video, caption_telemetry = self._apply_captions(video, clip_path, config.get('captions', {}), safe_zone, streamer_name)
+            if config.get('captions', {}).get('enabled', True) and transcript:
+                # Use existing transcript instead of re-transcribing
+                video, caption_telemetry = self._apply_captions_with_transcript(video, transcript, config.get('captions', {}), safe_zone, streamer_name)
                 telemetry.words_rendered = caption_telemetry.get('words_rendered', 0)
                 telemetry.emphasis_hits = caption_telemetry.get('emphasis_hits', 0)
                 telemetry.hook_used = caption_telemetry.get('hook_used', False)
@@ -292,6 +309,49 @@ class ClipEnhancerV2:
         except Exception as e:
             logger.error(f"❌ Enhancement failed: {e}")
             raise
+    
+    def _detect_irl_content(self, clip_path: Path, transcript: str = None) -> bool:
+        """Detect if content is IRL/Just Chatting (no gaming)"""
+        try:
+            # Keywords that indicate IRL/Just Chatting content
+            irl_keywords = [
+                'just chatting', 'irl', 'talking', 'reacting', 'reaction', 'chat',
+                'interview', 'podcast', 'discussion', 'story', 'storytime',
+                'cooking', 'eating', 'music', 'singing', 'dancing', 'workout',
+                'travel', 'vlog', 'review', 'unboxing', 'asmr', 'viewers',
+                'donations', 'subscribe', 'follow', 'thanks', 'appreciate',
+                'question', 'answer', 'explain', 'opinion', 'think', 'feel',
+                'stream', 'streaming', 'content', 'youtube', 'tiktok'
+            ]
+            
+            # Check transcript for IRL indicators
+            if transcript:
+                transcript_lower = transcript.lower()
+                irl_score = sum(1 for keyword in irl_keywords if keyword in transcript_lower)
+                
+                # Gaming keywords that would override IRL detection
+                gaming_keywords = [
+                    'game', 'play', 'level', 'kill', 'death', 'respawn', 'match',
+                    'round', 'enemy', 'teammate', 'weapon', 'item', 'quest',
+                    'boss', 'dungeon', 'raid', 'pvp', 'fps', 'moba', 'rpg'
+                ]
+                gaming_score = sum(1 for keyword in gaming_keywords if keyword in transcript_lower)
+                
+                # If significantly more IRL keywords than gaming keywords
+                if irl_score > gaming_score + 2:
+                    logger.info(f"🗣️ IRL content detected via transcript (IRL: {irl_score}, Gaming: {gaming_score})")
+                    return True
+            
+            # Additional detection could be added here:
+            # - Game category from Twitch API
+            # - Video analysis for UI elements
+            # - Audio analysis for game sounds
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"⚠️ IRL detection failed: {e}")
+            return False
     
     def _apply_format_framing(self, video, format_config: Dict) -> Tuple[Any, SafeZone]:
         """Story A: Format & Framing with Viral Split-Screen Layout"""
@@ -519,15 +579,13 @@ class ClipEnhancerV2:
         import numpy as np
         return (image * 0.3).astype(np.uint8)
     
-    def _apply_captions(self, video, clip_path: Path, captions_config: Dict, safe_zone: SafeZone, streamer_name: str) -> Tuple[Any, Dict]:
-        """Story B: Captions & Copy with VIRAL EFFECTS"""
+    def _apply_captions_with_transcript(self, video, transcript: List[Dict], captions_config: Dict, safe_zone: SafeZone, streamer_name: str) -> Tuple[Any, Dict]:
+        """Story B: Captions & Copy with VIRAL EFFECTS (using existing transcript)"""
         telemetry = {}
         
         if not captions_config.get('enabled', True):
             return video, telemetry
         
-        # Transcribe audio
-        transcript = self._transcribe_audio(clip_path)
         if not transcript:
             logger.warning("⚠️ No transcript available, skipping captions")
             return video, telemetry

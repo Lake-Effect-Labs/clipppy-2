@@ -695,6 +695,279 @@ streamers:
         attribution:
           enabled: true
 
+- name: caedrel
+  twitch_username: caedrel
+  broadcaster_id: '92038375'  # Caedrel Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 50.0  # Higher threshold for popular streamer
+    viewer_increase: 25.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.6  # Balanced threshold for League content
+    min_unique_chatters: 30
+    cooldown_seconds: 300   # 5 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - CAEDREL
+        - LEAGUE
+        - LEC
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@caedrel_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: zackrawrr
+  twitch_username: zackrawrr
+  broadcaster_id: '552120296'  # Zackrawrr (Asmongold alt) Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 60.0  # High threshold for massive streamer
+    viewer_increase: 30.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.7  # Higher threshold for huge streamer
+    min_unique_chatters: 40
+    cooldown_seconds: 300   # 5 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - ZACK
+        - ASMON
+        - DUDE
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@zackrawrr_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: maximum
+  twitch_username: maximum
+  broadcaster_id: '42490770'  # Maximum Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 45.0  # Medium-high threshold
+    viewer_increase: 22.0
+    time_window: 12
+  viral_algorithm:
+    score_threshold: 0.5  # Balanced threshold
+    min_unique_chatters: 25
+    cooldown_seconds: 240   # 4 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - MAXIMUM
+        - MAX
+        - YO
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@maximum_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: jasontheween
+  twitch_username: jasontheween
+  broadcaster_id: '107117952'  # JasonTheWeen Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 40.0  # Medium threshold
+    viewer_increase: 20.0
+    time_window: 12
+  viral_algorithm:
+    score_threshold: 0.5  # Balanced threshold
+    min_unique_chatters: 25
+    cooldown_seconds: 240   # 4 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - JASON
+        - WEEN
+        - YO
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@jasontheween_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: lirik
+  twitch_username: lirik
+  broadcaster_id: '23161357'  # LIRIK Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 65.0  # Very high threshold for massive OG streamer
+    viewer_increase: 30.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.8  # High threshold for legendary streamer
+    min_unique_chatters: 50
+    cooldown_seconds: 360   # 6 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - LIRIK
+        - DUDE
+        - CHAT
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@lirik_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: tarik
+  twitch_username: tarik
+  broadcaster_id: '36340781'  # Tarik Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 55.0  # High threshold for popular streamer
+    viewer_increase: 25.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.7  # Higher threshold for big streamer
+    min_unique_chatters: 35
+    cooldown_seconds: 300   # 5 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - TARIK
+        - VALORANT
+        - CS
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@tarik_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
+- name: summit1g
+  twitch_username: summit1g
+  broadcaster_id: '26490481'  # Summit1G Twitch ID
+  enabled: true  # ENABLED for always-on system
+  thresholds:
+    chat_spike: 60.0  # High threshold for massive OG streamer
+    viewer_increase: 28.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.8  # High threshold for legendary streamer
+    min_unique_chatters: 45
+    cooldown_seconds: 360   # 6 minutes between clips
+    baseline_window_minutes: 2
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - SUMMIT
+        - DUDE
+        - CHAT
+        - WTF
+        - POGGERS
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@summit1g_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+
 - name: shroud
   twitch_username: shroud
   broadcaster_id: '37402112'
