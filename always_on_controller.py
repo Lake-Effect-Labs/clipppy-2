@@ -311,7 +311,7 @@ class AlwaysOnController:
                 logger.info(f"🎬 Worker {worker_id} processing: {job['clip_url']}")
                 
                 # Process enhancement (import here to avoid circular imports)
-                from clip_enhancer import ClipEnhancer
+                from clip_enhancer_v2 import ClipEnhancerV2 as ClipEnhancer
                 from clip_enhancer_v2 import ClipEnhancerV2
                 
                 enhancer_v1 = ClipEnhancer()

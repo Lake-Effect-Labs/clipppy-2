@@ -28,7 +28,7 @@ load_dotenv()
 
 # Import our enhanced modules
 try:
-    from clip_enhancer import ClipEnhancer, check_dependencies as check_deps_v1
+    from clip_enhancer_v2 import ClipEnhancerV2 as ClipEnhancer, check_dependencies as check_deps_v1
     from clip_enhancer_v2 import ClipEnhancerV2, check_dependencies
     from tiktok_uploader import TikTokUploader
     from viral_detector import ViralDetector
