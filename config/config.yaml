@@ -1,41 +1,114 @@
 twitch: null
 tiktok:
-  # Centralized TikTok account for all streamers
   main_account:
     username: clipppy_main
     api_key: your_tiktok_api_key
     api_secret: your_tiktok_api_secret
     access_token: your_tiktok_access_token
-    max_posts_per_day: 20  # Higher limit for multi-streamer content
+    max_posts_per_day: 20
     posting_hours:
-      start: 12  # 12 PM
-      end: 24   # 12 AM (prime TikTok hours)
-  
-  # Auto-posting settings
+      start: 12
+      end: 24
   auto_post: true
-  post_delay_minutes: 15  # Minimum time between posts
-  caption_template: "{phrase}\n\nCredit: @{streamer}\n\n{hashtags}"
+  post_delay_minutes: 15
+  caption_template: '{phrase}
+
+
+    Credit: @{streamer}
+
+
+    {hashtags}'
 global:
-  max_clips_per_day: 5
+  max_clips_per_day: 10  # target: ~10 clips total across all streamers
   monitoring_interval: 30
   cleanup_temp_files: true
   auto_enhance: true
   use_test_virality_alg: true
   default_thresholds:
-    chat_spike: 30
-    viewer_increase: 20
+    chat_spike: 60
+    viewer_increase: 30
     time_window: 10
   viral_algorithm:
-    score_threshold: 1.5
-    min_unique_chatters: 50  # High threshold for truly viral moments
-    cooldown_seconds: 300
-    baseline_window_minutes: 2
+    score_threshold: 0.8          # higher threshold for quality over quantity
+    min_unique_chatters: 25       # require more engagement
+    cooldown_seconds: 3600        # 1 hour between clips per streamer
     analysis_window_seconds: 15
+    baseline_window_minutes: 5    # more stable baseline learning
+    synergy_window_seconds: 8
+    min_separation_seconds: 45    # longer separation for novelty
+    std_floor: 0.1
+
+    # core weights used as defaults (overridable per profile)
     weights:
-      chat_velocity: 0.4
-      viewer_delta: 0.3
-      engagement_events: 0.2
-      follow_rate: 0.1
+      chat_velocity: 0.30
+      viewer_delta: 0.20
+      engagement_events: 0.20
+      follow_rate: 0.05
+      keyword_burst: 0.15
+      sentiment_swing: 0.05
+      emote_density: 0.05
+
+    # multi-signal gate: disabled for testing (set to 0)
+    core_gate:
+      require_any: 2                # require at least 2 signals to agree
+      thresholds:
+        chat_velocity_z: 1.5        # higher threshold for quality
+        engagement_events: 0.4      # higher threshold for quality
+        keyword_burst_z: 1.5        # higher threshold for quality
+        hype_level: 0.3             # higher threshold for quality
+
+    penalties:
+      raid_dampen: 1.0
+      brb_or_ad: 1.0
+      sub_only_chat: 1.0
+
+    quality:
+      min_first_time_ratio: 0.05     # require some new chatters
+      min_unique_chatters: 15        # require more engagement
+      min_viewer_count: 20           # higher viewer requirement
+
+profiles:
+  gaming:
+    weights:
+      chat_velocity: 0.32
+      viewer_delta: 0.15
+      engagement_events: 0.18
+      keyword_burst: 0.18
+      emote_density: 0.07
+      sentiment_swing: 0.05
+      follow_rate: 0.05
+    thresholds:
+      score_threshold: 0.8
+
+  irl:
+    weights:
+      chat_velocity: 0.22
+      viewer_delta: 0.18
+      engagement_events: 0.15
+      keyword_burst: 0.12
+      emote_density: 0.05
+      sentiment_swing: 0.18       # big on facial/vocal emotion
+      follow_rate: 0.10
+    thresholds:
+      score_threshold: 0.8
+
+  reaction:
+    weights:
+      chat_velocity: 0.24
+      viewer_delta: 0.16
+      engagement_events: 0.16
+      keyword_burst: 0.20
+      emote_density: 0.04
+      sentiment_swing: 0.14
+      follow_rate: 0.06
+    thresholds:
+      score_threshold: 0.8
+
+keywords:
+  global: ["clip", "no shot", "wtf", "holy", "omg", "no way", "bro", "LMAO", "pog", "poggers"]
+  gaming: ["ace","1v","clutch","flick","noscope","wallbang","pentakill","headshot","god run"]
+  irl:    ["crying","shaking","i'm done","no way","bro what","that's wild"]
+  reaction: ["pause","rewind","watch this","listen","turn this up","insane"]
 enhancement_presets:
   viral_shorts:
     format:
@@ -43,7 +116,7 @@ enhancement_presets:
       - 1080
       - 1920
       smart_crop: true
-      split_screen: true  # NEW: Enable viral split-screen layout
+      split_screen: true
       blur_background: true
       safe_zones:
         caption_bottom: 0.25
@@ -58,28 +131,25 @@ enhancement_presets:
       - POGGERS
       - SHEESH
       hook_line:
-        enabled: false  # Disabled hardcoded text
+        enabled: false
         duration: 2.0
         templates:
         - "NO SHOT \xF0\u0178\u02DC\xB1"
         - WAIT FOR IT...
         - ABSOLUTE MADNESS
       viral_effects:
-        enabled: true  # NEW: Viral TikTok effects
-        fast_mode: false  # Set to true for faster processing (skips effects)
+        enabled: true
+        fast_mode: false
         zoom_enabled: true
         shake_enabled: true
         flash_enabled: true
-        # Volume-based rage detection (temporarily disabled due to MoviePy compatibility)
-        volume_shake_enabled: false  # Disabled until MoviePy audio issues fixed
-        rage_volume_threshold: 0.2  # Volume level to trigger shake (0.0-1.0)
-        rage_shake_intensity: 0.10  # How strong the rage shake is
-        
-        # AI Emotion Detection - analyzes streamer face + voice for targeted effects
-        emotion_effects_enabled: false  # Enable emotion-based effects
-        hype_intensity: 1.0      # Multiplier for hype effects (zoom, shake, flash)
-        tilt_intensity: 1.0      # Multiplier for tilt effects (red tint, shake)
-        shock_intensity: 1.0     # Multiplier for shock effects (freeze, zoom)
+        volume_shake_enabled: false
+        rage_volume_threshold: 0.2
+        rage_shake_intensity: 0.1
+        emotion_effects_enabled: false
+        hype_intensity: 1.0
+        tilt_intensity: 1.0
+        shock_intensity: 1.0
       profanity_filter: pg
       style:
         font_family: Montserrat ExtraBold
@@ -191,16 +261,17 @@ streamers:
 - name: jynxzi
   twitch_username: jynxzi
   broadcaster_id: '411377640'
-  enabled: true  # ENABLED for always-on system
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 50.0
-    viewer_increase: 15.0
-    time_window: 10
+    chat_spike: 2.0
+    viewer_increase: 2.0
+    time_window: 5
   viral_algorithm:
-    score_threshold: 0.4  # Set to 0.4 as requested
-    min_unique_chatters: 30  # More achievable
-    cooldown_seconds: 300
-    baseline_window_minutes: 2
+    score_threshold: 0.8
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 5
   tiktok_account:
     username: jynxzi_clippy
     max_posts_per_day: 3
@@ -215,6 +286,7 @@ streamers:
     - '#fyp'
   enhancement:
     preset: viral_shorts
+    performance_mode: fast  # Use fast mode for quicker processing  
     overrides:
       captions:
         enabled: true
@@ -241,25 +313,25 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: nickmercs
   twitch_username: nickmercs
-  broadcaster_id: '15564828'  # NICKMERCS correct Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '15564828'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 75.0  # Higher threshold for big streamer
+    chat_spike: 75.0
     viewer_increase: 20.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.4  # Very low for smaller streamer
-    min_unique_chatters: 10  # Very achievable
-    cooldown_seconds: 300
-    baseline_window_minutes: 2
+    score_threshold: 0.8
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 5
   tiktok_account:
     username: nickmercs_clippy
     max_posts_per_day: 5
     posting_hours:
-      start: 12  # Earlier for US audience
+      start: 12
       end: 23
     hashtags:
     - '#nickmercs'
@@ -295,25 +367,24 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: nadeshot
   twitch_username: nadeshot
-  broadcaster_id: '21130533'  # Nadeshot Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '21130533'
+  enabled: true
   thresholds:
-    chat_spike: 60.0  # Medium threshold
+    chat_spike: 60.0
     viewer_increase: 18.0
     time_window: 12
   viral_algorithm:
-    score_threshold: 0.5  # Lower for medium streamer
-    min_unique_chatters: 15  # More achievable
+    score_threshold: 0.5
+    min_unique_chatters: 15
     cooldown_seconds: 300
     baseline_window_minutes: 2
   tiktok_account:
     username: nadeshot_clippy
     max_posts_per_day: 4
     posting_hours:
-      start: 13  # US afternoon/evening
+      start: 13
       end: 23
     hashtags:
     - '#nadeshot'
@@ -350,25 +421,24 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: xqc
   twitch_username: xqc
-  broadcaster_id: '71092938'  # xQc Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '71092938'
+  enabled: true
   thresholds:
-    chat_spike: 80.0  # High threshold for massive streamer
+    chat_spike: 80.0
     viewer_increase: 25.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.7  # Lower for big streamer
-    min_unique_chatters: 50  # More reasonable for testing
-    cooldown_seconds: 300
-    baseline_window_minutes: 2
+    score_threshold: 0.8
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 5
   tiktok_account:
     username: xqc_clippy
     max_posts_per_day: 5
     posting_hours:
-      start: 12  # All day for international audience
+      start: 12
       end: 23
     hashtags:
     - '#xqc'
@@ -408,20 +478,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: theburntpeanut
   twitch_username: theburntpeanut
-  broadcaster_id: '472066926'  # theburntpeanut Twitch ID
-  enabled: true  # ENABLED - focusing only on this streamer
+  broadcaster_id: '472066926'
+  enabled: true
+  profile: irl
   thresholds:
-    chat_spike: 20.0  # Lower threshold for smaller streamer
-    viewer_increase: 25.0
-    time_window: 12
+    chat_spike: 50.0
+    viewer_increase: 35.0
+    time_window: 15
   viral_algorithm:
-    score_threshold: 0.3  # Lower threshold for more clips
-    min_unique_chatters: 15  # Achievable for smaller stream
-    cooldown_seconds: 180   # 3 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.8
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 5
   tiktok_account:
     username: theburntpeanut_clippy
     max_posts_per_day: 5
@@ -437,6 +507,7 @@ streamers:
     - '#clips'
   enhancement:
     preset: viral_shorts
+    performance_mode: balanced  # Use balanced mode for stability (was causing freezing)
     overrides:
       captions:
         enabled: true
@@ -460,20 +531,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: lacy
   twitch_username: lacy
-  broadcaster_id: '494543675'  # Lacy Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '494543675'
+  enabled: true
+  profile: irl
   thresholds:
-    chat_spike: 40.0  # Medium threshold
+    chat_spike: 40.0
     viewer_increase: 20.0
     time_window: 12
   viral_algorithm:
-    score_threshold: 0.5  # Balanced threshold
+    score_threshold: 0.1
     min_unique_chatters: 25
-    cooldown_seconds: 240   # 4 minutes between clips
-    baseline_window_minutes: 2
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -499,20 +570,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: caseoh_
   twitch_username: caseoh_
-  broadcaster_id: '267160288'  # CaseOh Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '267160288'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 50.0  # Higher threshold for big streamer
+    chat_spike: 50.0
     viewer_increase: 25.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.6  # Higher threshold for popular streamer
-    min_unique_chatters: 30
-    cooldown_seconds: 300   # 5 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -538,20 +609,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: agent00
   twitch_username: agent00
-  broadcaster_id: '90222258'  # Agent00 Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '90222258'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 45.0  # Medium-high threshold
+    chat_spike: 45.0
     viewer_increase: 22.0
     time_window: 12
   viral_algorithm:
-    score_threshold: 0.5  # Balanced threshold
+    score_threshold: 0.1
     min_unique_chatters: 25
-    cooldown_seconds: 240   # 4 minutes between clips
-    baseline_window_minutes: 2
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -577,20 +648,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: stableronaldo
   twitch_username: stableronaldo
-  broadcaster_id: '246450563'  # StableRonaldo Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '246450563'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 40.0  # Medium threshold
+    chat_spike: 40.0
     viewer_increase: 20.0
     time_window: 12
   viral_algorithm:
-    score_threshold: 0.5  # Balanced threshold
+    score_threshold: 0.1
     min_unique_chatters: 25
-    cooldown_seconds: 240   # 4 minutes between clips
-    baseline_window_minutes: 2
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -616,20 +687,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: timthetatman
   twitch_username: timthetatman
-  broadcaster_id: '36769016'  # TimTheTatman Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '36769016'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 60.0  # Higher threshold for massive streamer
+    chat_spike: 60.0
     viewer_increase: 25.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.7  # Higher threshold for huge streamer
-    min_unique_chatters: 40
-    cooldown_seconds: 300   # 5 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -655,20 +726,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: asmongold
   twitch_username: asmongold
-  broadcaster_id: '26261471'  # Asmongold Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '26261471'
+  enabled: true
+  profile: reaction
   thresholds:
-    chat_spike: 70.0  # Very high threshold for massive streamer
+    chat_spike: 70.0
     viewer_increase: 30.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.8  # High threshold for huge streamer
-    min_unique_chatters: 50
-    cooldown_seconds: 360   # 6 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -694,20 +765,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: caedrel
   twitch_username: caedrel
-  broadcaster_id: '92038375'  # Caedrel Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '92038375'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 50.0  # Higher threshold for popular streamer
+    chat_spike: 50.0
     viewer_increase: 25.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.6  # Balanced threshold for League content
-    min_unique_chatters: 30
-    cooldown_seconds: 300   # 5 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -733,20 +804,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: zackrawrr
   twitch_username: zackrawrr
-  broadcaster_id: '552120296'  # Zackrawrr (Asmongold alt) Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '552120296'
+  enabled: true
+  profile: reaction
   thresholds:
-    chat_spike: 60.0  # High threshold for massive streamer
+    chat_spike: 60.0
     viewer_increase: 30.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.7  # Higher threshold for huge streamer
-    min_unique_chatters: 40
-    cooldown_seconds: 300   # 5 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -772,20 +843,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: maximum
   twitch_username: maximum
-  broadcaster_id: '42490770'  # Maximum Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '42490770'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 45.0  # Medium-high threshold
+    chat_spike: 45.0
     viewer_increase: 22.0
     time_window: 12
   viral_algorithm:
-    score_threshold: 0.5  # Balanced threshold
+    score_threshold: 0.1
     min_unique_chatters: 25
-    cooldown_seconds: 240   # 4 minutes between clips
-    baseline_window_minutes: 2
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -811,20 +882,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: jasontheween
   twitch_username: jasontheween
-  broadcaster_id: '107117952'  # JasonTheWeen Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '107117952'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 40.0  # Medium threshold
+    chat_spike: 40.0
     viewer_increase: 20.0
     time_window: 12
   viral_algorithm:
-    score_threshold: 0.5  # Balanced threshold
+    score_threshold: 0.1
     min_unique_chatters: 25
-    cooldown_seconds: 240   # 4 minutes between clips
-    baseline_window_minutes: 2
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -850,20 +921,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: lirik
   twitch_username: lirik
-  broadcaster_id: '23161357'  # LIRIK Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '23161357'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 65.0  # Very high threshold for massive OG streamer
+    chat_spike: 65.0
     viewer_increase: 30.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.8  # High threshold for legendary streamer
-    min_unique_chatters: 50
-    cooldown_seconds: 360   # 6 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -889,20 +960,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: tarik
   twitch_username: tarik
-  broadcaster_id: '36340781'  # Tarik Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '36340781'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 55.0  # High threshold for popular streamer
+    chat_spike: 55.0
     viewer_increase: 25.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.7  # Higher threshold for big streamer
-    min_unique_chatters: 35
-    cooldown_seconds: 300   # 5 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -928,20 +999,20 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: summit1g
   twitch_username: summit1g
-  broadcaster_id: '26490481'  # Summit1G Twitch ID
-  enabled: true  # ENABLED for always-on system
+  broadcaster_id: '26490481'
+  enabled: true
+  profile: gaming
   thresholds:
-    chat_spike: 60.0  # High threshold for massive OG streamer
+    chat_spike: 60.0
     viewer_increase: 28.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.8  # High threshold for legendary streamer
-    min_unique_chatters: 45
-    cooldown_seconds: 360   # 6 minutes between clips
-    baseline_window_minutes: 2
+    score_threshold: 0.1
+    min_unique_chatters: 25
+    cooldown_seconds: 3600
+    baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts
     overrides:
@@ -967,7 +1038,6 @@ streamers:
           enabled: true
         attribution:
           enabled: true
-
 - name: shroud
   twitch_username: shroud
   broadcaster_id: '37402112'

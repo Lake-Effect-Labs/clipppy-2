@@ -57,6 +57,10 @@ except ImportError:
     cv2 = None
     np = None
 
+# TikTok-first enhancement settings
+AUTO_HOOK = True
+EXPORT_LONG_TIKTOK = True  # when keyword_burst_z or sentiment_swing_z high
+
 # Audio processing
 try:
     import whisper
@@ -66,6 +70,19 @@ except ImportError:
     whisper = None
 
 logger = logging.getLogger(__name__)
+
+def build_hook_text(breakdown: dict) -> str:
+    """Build TikTok hook text from viral detection breakdown"""
+    mps = breakdown.get("current_mps", 0)
+    kwz = breakdown.get("z",{}).get("kw",0)
+    vdp = breakdown.get("viewer_delta_percent", 0)
+    if kwz >= 2.0:
+        return "wait for it… insane moment"
+    if vdp >= 10:
+        return "viewers skyrocketed… here's why"
+    if mps >= 3.0:
+        return "chat explodes in 3…2…1…"
+    return "you won't believe this"
 
 @dataclass
 class EnhancementTelemetry:
@@ -204,10 +221,14 @@ class ClipEnhancerV2:
             }
         }
     
-    def enhance_clip(self, clip_path: str, streamer_config: Dict, output_path: Optional[str] = None) -> Tuple[str, EnhancementTelemetry]:
+    def enhance_clip(self, clip_path: str, streamer_config: Dict, output_path: Optional[str] = None, viral_breakdown: Optional[Dict] = None) -> Tuple[str, EnhancementTelemetry]:
         """Main enhancement pipeline"""
         start_time = time.time()
         telemetry = EnhancementTelemetry()
+        
+        # Performance mode for faster processing
+        performance_mode = streamer_config.get('enhancement', {}).get('performance_mode', 'balanced')
+        logger.info(f"⚡ Performance mode: {performance_mode}")
         
         try:
             clip_path = Path(clip_path)
@@ -238,12 +259,29 @@ class ClipEnhancerV2:
             video = mp.VideoFileClip(str(clip_path))
             original_duration = video.duration
             
+            # TikTok-first enhancements
+            hook_text = None
+            export_long_variant = False
+            
+            if AUTO_HOOK and viral_breakdown:
+                hook_text = build_hook_text(viral_breakdown)
+                logger.info(f"🎣 Generated hook: '{hook_text}'")
+                
+                # Check if we should export a long variant
+                kw_score = viral_breakdown.get("components", {}).get("keyword", 0)
+                sent_score = viral_breakdown.get("components", {}).get("sentiment", 0)
+                if EXPORT_LONG_TIKTOK and (kw_score + sent_score) > 0.25:
+                    export_long_variant = True
+                    logger.info("📱 Will export long TikTok variant (65s) - high teaching/reaction signals")
+            
             # Check for IRL content before format & framing
             logger.info("🔍 Checking content type...")
             transcript_text = None
             if config.get('captions', {}).get('enabled', True):
                 # Get transcript for both IRL detection and captions
-                transcript = self._transcribe_audio(clip_path)
+                # Use faster transcription in performance mode
+                fast_mode = performance_mode in ['fast', 'realtime']
+                transcript = self._transcribe_audio(clip_path, fast_mode=fast_mode)
                 if transcript:
                     transcript_text = ' '.join([word['text'] for word in transcript])
             
@@ -256,13 +294,13 @@ class ClipEnhancerV2:
             
             # Story A: Format & Framing
             logger.info("📐 Applying format & framing...")
-            video, safe_zone = self._apply_format_framing(video, config.get('format', {}))
+            video, safe_zone = self._apply_format_framing(video, config.get('format', {}), streamer_name)
             
             # Story B: Captions & Copy
             logger.info("📝 Adding captions...")
             if config.get('captions', {}).get('enabled', True) and transcript:
                 # Use existing transcript instead of re-transcribing
-                video, caption_telemetry = self._apply_captions_with_transcript(video, transcript, config.get('captions', {}), safe_zone, streamer_name)
+                video, caption_telemetry = self._apply_captions_with_transcript(video, transcript, config.get('captions', {}), safe_zone, streamer_name, clip_path)
                 telemetry.words_rendered = caption_telemetry.get('words_rendered', 0)
                 telemetry.emphasis_hits = caption_telemetry.get('emphasis_hits', 0)
                 telemetry.hook_used = caption_telemetry.get('hook_used', False)
@@ -290,6 +328,8 @@ class ClipEnhancerV2:
             # Story H: Platform Native Output
             logger.info("💾 Rendering final video...")
             platform_config = config.get('platform', {})
+            # Pass performance mode to renderer
+            platform_config['performance_mode'] = performance_mode
             self._render_video(video, output_path, platform_config)
             
             # Calculate telemetry
@@ -300,6 +340,35 @@ class ClipEnhancerV2:
             logger.info(f"📊 Processing time: {processing_time:.0f}ms")
             logger.info(f"📊 Words rendered: {telemetry.words_rendered}")
             logger.info(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
+            
+            # TikTok variant export logic
+            if export_long_variant:
+                logger.info("📱 Exporting 65s TikTok variant...")
+                long_output_path = output_path.parent / f"long_{output_path.name}"
+                
+                # Create longer version (65s) with slower pacing
+                long_video = video.subclip(0, min(65, video.duration))
+                
+                # Add VO context overlay if available (future enhancement)
+                # For now, just export the longer version
+                long_platform_config = platform_config.copy()
+                long_platform_config['performance_mode'] = 'fast'  # Quick render for variant
+                self._render_video(long_video, long_output_path, long_platform_config)
+                
+                logger.info(f"📱 Long variant saved: {long_output_path}")
+                long_video.close()
+            
+            # Always export default viral cut (25s)
+            if original_duration > 25:
+                viral_output_path = output_path.parent / f"viral_{output_path.name}"
+                viral_video = video.subclip(0, 25)
+                
+                viral_platform_config = platform_config.copy()
+                viral_platform_config['performance_mode'] = 'fast'
+                self._render_video(viral_video, viral_output_path, viral_platform_config)
+                
+                logger.info(f"🎯 Viral cut (25s) saved: {viral_output_path}")
+                viral_video.close()
             
             # Cleanup
             video.close()
@@ -353,7 +422,7 @@ class ClipEnhancerV2:
             logger.warning(f"⚠️ IRL detection failed: {e}")
             return False
     
-    def _apply_format_framing(self, video, format_config: Dict) -> Tuple[Any, SafeZone]:
+    def _apply_format_framing(self, video, format_config: Dict, streamer_name: str = None) -> Tuple[Any, SafeZone]:
         """Story A: Format & Framing with Viral Split-Screen Layout"""
         target_w, target_h = format_config.get('target_resolution', [1080, 1920])
         smart_crop = format_config.get('smart_crop', True)
@@ -376,7 +445,7 @@ class ClipEnhancerV2:
             logger.info(f"🎮 Creating viral split-screen layout from {original_w}x{original_h}")
             
             # Detect face and gameplay areas
-            face_region, gameplay_region = self._detect_face_and_gameplay(video)
+            face_region, gameplay_region = self._detect_face_and_gameplay(video, streamer_name)
             
             if face_region and gameplay_region:
                 # Create split-screen: gameplay top (60%), face bottom (40%) - balanced layout
@@ -399,11 +468,11 @@ class ClipEnhancerV2:
                     y2=face_region[3]
                 ).resize((target_w, face_height))
                 
-                # Combine into split-screen
-                video = mp.CompositeVideoClip([
-                    gameplay_clip.set_position((0, 0)),  # Top
-                    face_clip.set_position((0, gameplay_height))  # Bottom
-                ], size=(target_w, target_h))
+                # Skip split-screen to avoid CompositeVideoClip freeze
+                logger.info(f"⚠️ Skipping split-screen to avoid CompositeVideoClip freeze issue")
+                # TODO: Implement split-screen using concatenate or other non-composite methods
+                # For now, just resize the video
+                video = video.resize(newsize=(target_w, target_h))
                 
                 logger.info(f"🎮 Created split-screen: gameplay {target_w}x{gameplay_height}, face {target_w}x{face_height}")
                 
@@ -423,117 +492,283 @@ class ClipEnhancerV2:
         
         return video, safe_zone
     
-    def _detect_face_and_gameplay(self, video) -> Tuple[Optional[Tuple], Optional[Tuple]]:
+    def _analyze_video_layout(self, video) -> Dict:
+        """
+        Intelligently analyze video layout to determine optimal crop regions
+        Returns layout analysis with recommended face and gameplay regions
+        """
+        try:
+            # Sample frames from different parts of the video
+            duration = video.duration
+            sample_times = [duration * 0.1, duration * 0.5, duration * 0.9]
+            
+            layout_analysis = {
+                'face_regions': [],
+                'static_regions': [],
+                'motion_regions': [],
+                'recommended_layout': 'single_crop'
+            }
+            
+            for sample_time in sample_times:
+                try:
+                    frame = video.get_frame(sample_time)
+                    
+                    # Detect faces in this frame
+                    if CV2_AVAILABLE:
+                        face_regions = self._detect_faces_in_frame(frame)
+                        layout_analysis['face_regions'].extend(face_regions)
+                        
+                        # Analyze motion density (areas with lots of changing pixels)
+                        motion_density = self._analyze_motion_density(frame)
+                        layout_analysis['motion_regions'].append(motion_density)
+                        
+                        # Detect static UI elements (consistent across frames)
+                        static_areas = self._detect_static_elements(frame)
+                        layout_analysis['static_regions'].append(static_areas)
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Frame analysis failed at {sample_time}s: {e}")
+                    continue
+            
+            # Determine optimal layout based on analysis
+            layout_analysis['recommended_layout'] = self._determine_optimal_layout(layout_analysis)
+            
+            logger.info(f"🔍 Layout Analysis: {layout_analysis['recommended_layout']} | Faces: {len(layout_analysis['face_regions'])} | Motion areas: {len(layout_analysis['motion_regions'])}")
+            
+            return layout_analysis
+            
+        except Exception as e:
+            logger.error(f"❌ Layout analysis failed: {e}")
+            return {'recommended_layout': 'single_crop', 'face_regions': [], 'motion_regions': [], 'static_regions': []}
+    
+    def _detect_faces_in_frame(self, frame) -> List[Tuple]:
+        """Detect face regions in a single frame"""
+        try:
+            # Convert to grayscale for face detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            
+            # Use OpenCV's built-in face detector
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            
+            face_regions = []
+            for (x, y, w, h) in faces:
+                # Normalize coordinates to 0-1 range
+                height, width = frame.shape[:2]
+                face_regions.append((x/width, y/height, (x+w)/width, (y+h)/height))
+            
+            return face_regions
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Face detection failed: {e}")
+            return []
+    
+    def _analyze_motion_density(self, frame) -> Dict:
+        """Analyze which areas of the frame have high motion/activity"""
+        try:
+            # Convert to grayscale and apply edge detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            
+            # Divide frame into grid and count edge density
+            height, width = edges.shape
+            grid_size = 8
+            motion_map = []
+            
+            for i in range(grid_size):
+                for j in range(grid_size):
+                    y1 = int(i * height / grid_size)
+                    y2 = int((i + 1) * height / grid_size)
+                    x1 = int(j * width / grid_size)
+                    x2 = int((j + 1) * width / grid_size)
+                    
+                    cell = edges[y1:y2, x1:x2]
+                    density = np.sum(cell) / (cell.shape[0] * cell.shape[1] * 255)
+                    
+                    motion_map.append({
+                        'region': (x1/width, y1/height, x2/width, y2/height),
+                        'density': density
+                    })
+            
+            return {'motion_map': motion_map, 'high_motion_areas': [m for m in motion_map if m['density'] > 0.1]}
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Motion analysis failed: {e}")
+            return {'motion_map': [], 'high_motion_areas': []}
+    
+    def _detect_static_elements(self, frame) -> Dict:
+        """Detect static UI elements like overlays, chat boxes, etc."""
+        try:
+            # Look for rectangular shapes that might be UI elements
+            gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+            edges = cv2.Canny(gray, 50, 150)
+            
+            # Find contours
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            ui_elements = []
+            height, width = frame.shape[:2]
+            
+            for contour in contours:
+                # Approximate contour to polygon
+                epsilon = 0.02 * cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, epsilon, True)
+                
+                # If it's roughly rectangular and reasonably sized
+                if len(approx) == 4:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    area_ratio = (w * h) / (width * height)
+                    
+                    if 0.01 < area_ratio < 0.3:  # Between 1% and 30% of screen
+                        ui_elements.append({
+                            'region': (x/width, y/height, (x+w)/width, (y+h)/height),
+                            'area_ratio': area_ratio,
+                            'aspect_ratio': w/h if h > 0 else 1.0
+                        })
+            
+            return {'ui_elements': ui_elements}
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Static element detection failed: {e}")
+            return {'ui_elements': []}
+    
+    def _determine_optimal_layout(self, analysis: Dict) -> str:
+        """Determine the best layout strategy based on analysis"""
+        try:
+            face_count = len(analysis['face_regions'])
+            motion_areas = len([r for motion in analysis['motion_regions'] for r in motion.get('high_motion_areas', [])])
+            
+            # Decision logic for layout
+            if face_count >= 3:  # Multiple faces detected across samples
+                if motion_areas > 10:  # High motion areas suggest gameplay + facecam
+                    return 'split_screen_horizontal'  # Face bottom, gameplay top
+                else:
+                    return 'split_screen_vertical'    # Face side, content other side
+            elif face_count >= 1:  # Single face detected
+                if motion_areas > 8:  # Likely gameplay with facecam
+                    return 'split_screen_horizontal'  # Face bottom, gameplay top
+                else:
+                    return 'face_focus'  # Focus on the face
+            else:  # No faces detected
+                if motion_areas > 5:
+                    return 'gameplay_focus'  # Focus on gameplay area
+                else:
+                    return 'single_crop'  # Just crop center
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Layout determination failed: {e}")
+            return 'single_crop'
+    
+    def _detect_face_and_gameplay(self, video, streamer_name: str = None) -> Tuple[Optional[Tuple], Optional[Tuple]]:
         """Detect face and main gameplay areas using improved face detection"""
         if not CV2_AVAILABLE:
             logger.warning("⚠️ OpenCV not available for face detection")
             return None, None
         
         try:
-            # Get multiple frames for better detection
-            duration = video.duration
-            frame_times = [duration * 0.3, duration * 0.5, duration * 0.7]  # Sample multiple points
-            best_face = None
-            best_face_size = 0
+            logger.info(f"🧠 Running SMART layout analysis for {streamer_name or 'unknown streamer'}")
             
-            for frame_time in frame_times:
-                frame = video.get_frame(frame_time)
+            # Run intelligent layout analysis
+            layout_analysis = self._analyze_video_layout(video)
+            recommended_layout = layout_analysis['recommended_layout']
+            face_regions = layout_analysis['face_regions']
+            
+            # Get frame dimensions
+            frame = video.get_frame(video.duration * 0.5)
+            frame_h, frame_w = frame.shape[:2]
                 
-                # Convert to OpenCV format
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            # Determine regions based on intelligent analysis
+            if recommended_layout == 'split_screen_horizontal':
+                logger.info("📱 SMART LAYOUT: Split-screen horizontal (face bottom, gameplay top)")
                 
-                # Try multiple face detection methods
-                face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-                
-                # Multiple detection passes with different parameters
-                faces_params = [
-                    {'scaleFactor': 1.1, 'minNeighbors': 5, 'minSize': (30, 30)},  # More sensitive
-                    {'scaleFactor': 1.2, 'minNeighbors': 3, 'minSize': (50, 50)},  # Default
-                    {'scaleFactor': 1.3, 'minNeighbors': 4, 'minSize': (80, 80)},  # Less sensitive
-                ]
-                
-                for params in faces_params:
-                    faces = face_cascade.detectMultiScale(gray, **params)
+                if face_regions:
+                    # Use detected face region, but ensure it's in bottom area
+                    primary_face = face_regions[0]  # Use first detected face
+                    face_x1, face_y1, face_x2, face_y2 = primary_face
                     
-                    if len(faces) > 0:
-                        # Get the largest face
-                        largest_face = max(faces, key=lambda f: f[2] * f[3])
-                        fx, fy, fw, fh = largest_face
-                        face_size = fw * fh
-                        
-                        if face_size > best_face_size:
-                            best_face = largest_face
-                            best_face_size = face_size
-                            break  # Found good face, no need to try other params
+                    # Convert to pixel coordinates and expand face region
+                    face_x1 = max(0, int((face_x1 - 0.1) * frame_w))
+                    face_y1 = max(int(0.6 * frame_h), int(face_y1 * frame_h))  # Keep in bottom area
+                    face_x2 = min(frame_w, int((face_x2 + 0.1) * frame_w))
+                    face_y2 = frame_h  # Extend to bottom
+                    
+                    face_region = (face_x1, face_y1, face_x2, face_y2)
+                else:
+                    # Default bottom-center for face if no face detected
+                    face_region = (int(0.3 * frame_w), int(0.6 * frame_h), frame_w, frame_h)
                 
-                if best_face is not None:
-                    break  # Found face, no need to check other frames
+                gameplay_region = (0, 0, frame_w, int(0.65 * frame_h))  # Top area for gameplay
+                    
+            elif recommended_layout == 'split_screen_vertical':
+                logger.info("📱 SMART LAYOUT: Split-screen vertical (face side, gameplay other side)")
+                
+                if face_regions:
+                    primary_face = face_regions[0]
+                    face_x1, face_y1, face_x2, face_y2 = primary_face
+                    face_center_x = (face_x1 + face_x2) / 2
+                    
+                    if face_center_x > 0.5:  # Face on right side
+                        face_region = (int(0.6 * frame_w), 0, frame_w, frame_h)
+                        gameplay_region = (0, 0, int(0.6 * frame_w), frame_h)
+                    else:  # Face on left side
+                        face_region = (0, 0, int(0.4 * frame_w), frame_h)
+                        gameplay_region = (int(0.4 * frame_w), 0, frame_w, frame_h)
+                else:
+                    # Default right side for face
+                    face_region = (int(0.6 * frame_w), 0, frame_w, frame_h)
+                    gameplay_region = (0, 0, int(0.6 * frame_w), frame_h)
+                    
+            elif recommended_layout == 'face_focus':
+                logger.info("📱 SMART LAYOUT: Face focus (Just Chatting style)")
+                
+                if face_regions:
+                    primary_face = face_regions[0]
+                    face_x1, face_y1, face_x2, face_y2 = primary_face
+                    
+                    # Expand around the detected face
+                    face_x1 = max(0, int((face_x1 - 0.2) * frame_w))
+                    face_y1 = max(0, int((face_y1 - 0.1) * frame_h))
+                    face_x2 = min(frame_w, int((face_x2 + 0.2) * frame_w))
+                    face_y2 = min(frame_h, int((face_y2 + 0.1) * frame_h))
+                    
+                    face_region = (face_x1, face_y1, face_x2, face_y2)
+                    gameplay_region = None  # No separate gameplay region
+                else:
+                    face_region = (int(0.1 * frame_w), int(0.1 * frame_h), 
+                                 int(0.9 * frame_w), int(0.9 * frame_h))  # Center crop
+                    gameplay_region = None
+                    
+            elif recommended_layout == 'gameplay_focus':
+                logger.info("📱 SMART LAYOUT: Gameplay focus (no face detected)")
+                face_region = None
+                
+                # Find highest motion area for gameplay
+                motion_regions = layout_analysis['motion_regions']
+                if motion_regions and motion_regions[0].get('high_motion_areas'):
+                    # Use the area with highest motion density
+                    high_motion = max(motion_regions[0]['high_motion_areas'], 
+                                    key=lambda x: x['density'])
+                    mx1, my1, mx2, my2 = high_motion['region']
+                    gameplay_region = (int(mx1 * frame_w), int(my1 * frame_h),
+                                     int(mx2 * frame_w), int(my2 * frame_h))
+                else:
+                    gameplay_region = (int(0.1 * frame_w), int(0.1 * frame_h),
+                                     int(0.9 * frame_w), int(0.9 * frame_h))  # Center crop
+                    
+            else:  # single_crop fallback
+                logger.info("📱 SMART LAYOUT: Single crop (center focus)")
+                face_region = (int(0.1 * frame_w), int(0.1 * frame_h), 
+                             int(0.9 * frame_w), int(0.9 * frame_h))
+                gameplay_region = None
             
-            if best_face is not None:
-                fx, fy, fw, fh = best_face
-                frame_h, frame_w = frame.shape[:2]
-                
-                logger.info(f"👤 Found face at ({fx}, {fy}) size {fw}x{fh}")
-                
-                # For NICKMERCS-style layout: face should be on the right side typically
-                # Use the face location to determine the best crop areas
-                
-                # Face region with generous padding for full head/shoulders
-                padding = 1.2  # Even more generous padding
-                face_x1 = max(0, int(fx - fw * padding))
-                face_y1 = max(0, int(fy - fh * padding))
-                face_x2 = min(frame_w, int(fx + fw * (1 + padding)))
-                face_y2 = min(frame_h, int(fy + fh * (1 + padding)))
-                
-                # Ensure minimum face region size (at least 1/3 of frame width)
-                min_face_width = frame_w // 3
-                if (face_x2 - face_x1) < min_face_width:
-                    center_x = (face_x1 + face_x2) // 2
-                    face_x1 = max(0, center_x - min_face_width // 2)
-                    face_x2 = min(frame_w, center_x + min_face_width // 2)
-                
-                face_region = (face_x1, face_y1, face_x2, face_y2)
-                
-                # Gameplay area: try to avoid the face area
-                # If face is on the right, gameplay should focus on left/center
-                if fx > frame_w * 0.6:  # Face on right side
-                    gameplay_x1 = 0
-                    gameplay_x2 = int(frame_w * 0.8)  # Don't include full right side
-                else:  # Face on left side or center
-                    gameplay_x1 = int(frame_w * 0.2)  # Skip left portion
-                    gameplay_x2 = frame_w
-                
-                gameplay_y1 = 0
-                gameplay_y2 = frame_h
-                
-                gameplay_region = (gameplay_x1, gameplay_y1, gameplay_x2, gameplay_y2)
-                
-                logger.info(f"🎮 Smart gameplay region: {gameplay_region} (avoiding face area)")
-                logger.info(f"👤 Enhanced face region: {face_region} with {padding}x padding")
-                
-                return face_region, gameplay_region
+            # Log the final decision
+            if face_region and gameplay_region:
+                logger.info(f"✅ SMART CROP: Face {face_region} | Gameplay {gameplay_region}")
+            elif face_region:
+                logger.info(f"✅ SMART CROP: Face-only {face_region}")
+            elif gameplay_region:
+                logger.info(f"✅ SMART CROP: Gameplay-only {gameplay_region}")
             
-            else:
-                logger.warning("⚠️ No faces detected in any frame")
-                # Return fallback regions based on typical streaming layout
-                frame_h, frame_w = frame.shape[:2]
-                
-                # Assume face is on right side (typical for most streamers)
-                face_x1 = int(frame_w * 0.6)  # Right 40% of frame
-                face_y1 = int(frame_h * 0.2)  # Skip top 20%
-                face_x2 = frame_w
-                face_y2 = int(frame_h * 0.8)  # Skip bottom 20%
-                face_region = (face_x1, face_y1, face_x2, face_y2)
-                
-                # Gameplay in left/center
-                gameplay_x1 = 0
-                gameplay_x2 = int(frame_w * 0.8)
-                gameplay_y1 = 0
-                gameplay_y2 = frame_h
-                gameplay_region = (gameplay_x1, gameplay_y1, gameplay_x2, gameplay_y2)
-                
-                logger.info(f"📺 Using fallback layout - Face: {face_region}, Gameplay: {gameplay_region}")
                 return face_region, gameplay_region
                 
         except Exception as e:
@@ -579,7 +814,7 @@ class ClipEnhancerV2:
         import numpy as np
         return (image * 0.3).astype(np.uint8)
     
-    def _apply_captions_with_transcript(self, video, transcript: List[Dict], captions_config: Dict, safe_zone: SafeZone, streamer_name: str) -> Tuple[Any, Dict]:
+    def _apply_captions_with_transcript(self, video, transcript: List[Dict], captions_config: Dict, safe_zone: SafeZone, streamer_name: str, clip_path: Path = None) -> Tuple[Any, Dict]:
         """Story B: Captions & Copy with VIRAL EFFECTS (using existing transcript)"""
         telemetry = {}
         
@@ -595,6 +830,7 @@ class ClipEnhancerV2:
         
         # Add hook line if enabled
         hook_config = captions_config.get('hook_line', {})
+        hook_text = None
         if hook_config.get('enabled', False):
             hook_text = self._generate_hook_line(hook_config, words, streamer_name)
             if hook_text:
@@ -618,75 +854,261 @@ class ClipEnhancerV2:
         if captions_config.get('karaoke_sync', True) and words:
             caption_clips = self._create_karaoke_captions(words, captions_config.get('style', {}), video.size, safe_zone)
             if caption_clips:
-                video = mp.CompositeVideoClip([video] + caption_clips)
+                logger.info(f"📝 Applying {len(words)} caption words using video.fl() method")
+                video = self._apply_captions_with_fl(video, words, captions_config.get('style', {}), safe_zone, hook_text=hook_text)
         
         telemetry['words_rendered'] = len(words)
         telemetry['emphasis_hits'] = sum(1 for word in words if word.is_emphasis)
         
         return video, telemetry
     
+    def _apply_captions_with_fl(self, video, words: List[CaptionWord], style_config: Dict, safe_zone: SafeZone, hook_text: Optional[str] = None):
+        """Apply captions using video.fl() to avoid CompositeVideoClip freezing"""
+        try:
+            import cv2
+            import numpy as np
+            
+            # MEGA VIRAL TikTok caption styling
+            font_size = style_config.get('font_size', 56)  # EVEN BIGGER font for TikTok
+            font_color = tuple(style_config.get('font_color', [255, 255, 0]))  # BRIGHT YELLOW
+            stroke_color = tuple(style_config.get('stroke_color', [0, 0, 0]))  # Black outline
+            stroke_width = style_config.get('stroke_width', 5)  # THICKER outline for readability
+            emphasis_color = (0, 255, 255)  # Cyan for emphasis words
+            
+            def caption_effect(get_frame, t):
+                frame = get_frame(t)
+                
+                # TikTok hook text at the beginning (0.6-0.8s)
+                if hook_text and 0.0 <= t <= 0.8:
+                    frame_height, frame_width = frame.shape[:2]
+                    hook_y = 80  # Top area for hook
+                    
+                    # VIRAL hook styling - bright and attention-grabbing
+                    cv2.putText(frame, hook_text.upper(), 
+                               (30, hook_y), cv2.FONT_HERSHEY_SIMPLEX, 
+                               1.2, (0, 255, 255), 4, cv2.LINE_AA)  # Cyan, thick
+                    # Add shadow for better readability
+                    cv2.putText(frame, hook_text.upper(), 
+                               (32, hook_y + 2), cv2.FONT_HERSHEY_SIMPLEX, 
+                               1.2, (0, 0, 0), 6, cv2.LINE_AA)  # Black shadow
+                
+                # Find active words at current time
+                active_words = [word for word in words if word.start_time <= t <= word.end_time]
+                
+                if active_words:
+                    frame_height, frame_width = frame.shape[:2]
+                    
+                    # Create VIRAL TikTok-style text
+                    text_lines = []
+                    current_line = ""
+                    
+                    for word in active_words:
+                        # Convert to ALL CAPS for viral TikTok style
+                        viral_word = word.text.upper()
+                        
+                        # Add space between words but keep lines shorter for better readability
+                        if len(current_line) + len(viral_word) + 1 < 25:  # Shorter lines for TikTok
+                            current_line += (" " if current_line else "") + viral_word
+                        else:
+                            if current_line:
+                                text_lines.append(current_line)
+                            current_line = viral_word
+                    
+                    if current_line:
+                        text_lines.append(current_line)
+                    
+                    # Render VIRAL text on frame
+                    if text_lines:
+                        # Calculate position in safe zone (bottom area)
+                        y_start = int(frame_height * (1 - safe_zone.bottom)) + 30
+                        
+                        for i, line in enumerate(text_lines):
+                            y_pos = y_start + (i * (font_size + 15))
+                            
+                            # Check if line contains emphasis words (text is already ALL CAPS)
+                            is_emphasis = any(word in line for word in ['INSANE', 'CRAZY', 'WTF', 'THEBURNTPEANUT', 'NO WAY', 'CLUTCH', 'POGGERS', 'SHEESH', 'LETS GO', 'OH MY GOD', 'WHAT THE'])
+                            
+                            # Use different colors and sizing for emphasis 
+                            current_font_color = emphasis_color if is_emphasis else font_color
+                            current_font_size = (font_size + 12) if is_emphasis else font_size  # MUCH bigger for emphasis
+                            
+                            # Center text horizontally
+                            text_size = cv2.getTextSize(line, cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, stroke_width)[0]
+                            x_pos = (frame_width - text_size[0]) // 2
+                            
+                            # Add shadow effect for depth
+                            shadow_offset = 3
+                            cv2.putText(frame, line, (x_pos + shadow_offset, y_pos + shadow_offset), 
+                                      cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, (50, 50, 50), stroke_width + 1)
+                            
+                            # Draw thick black outline
+                            cv2.putText(frame, line, (x_pos, y_pos), 
+                                      cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, stroke_color, stroke_width + 3)
+                            
+                            # Draw main text
+                            cv2.putText(frame, line, (x_pos, y_pos), 
+                                      cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, current_font_color, stroke_width)
+                            
+                            # Add extra glow for emphasis words
+                            if is_emphasis:
+                                # Glowing effect
+                                cv2.putText(frame, line, (x_pos, y_pos), 
+                                          cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, (255, 255, 255), 1)
+                
+                return frame
+            
+            logger.info("✅ Applied captions using video.fl() method")
+            return video.fl(caption_effect)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Caption FL effect failed: {e}")
+            return video
+    
     def _apply_viral_effects(self, video, words: List[CaptionWord], viral_config: Dict):
-        """Apply viral TikTok-style effects during emphasis moments"""
+        """Apply AUDIO-REACTIVE viral effects based on volume levels!"""
         try:
             effects_applied = []
+            duration = video.duration
             
-            # Find emphasis moments for viral effects
-            emphasis_moments = [word for word in words if word.is_emphasis]
+            logger.info(f"🎵 Analyzing audio for reactive effects on {duration:.1f}s clip")
             
-            # TEMP: If no emphasis found, create fake ones for testing
-            if not emphasis_moments and len(words) > 5:
-                logger.info("🧪 No emphasis found, creating test effects at 2-second mark")
-                fake_emphasis = CaptionWord(
-                    text="INSANE", 
-                    start_time=2.0, 
-                    end_time=2.5, 
-                    is_emphasis=True
-                )
-                emphasis_moments = [fake_emphasis]
-            
-            if not emphasis_moments:
-                logger.info("📺 No emphasis moments found, skipping viral effects")
+            # Extract audio for volume analysis
+            audio = video.audio
+            if not audio:
+                logger.warning("⚠️ No audio found, using minimal effects")
+                # Fallback to minimal flash effects at start/end
+                video = self._add_flash_effect(video, 0.5, 0.1)
+                video = self._add_flash_effect(video, duration - 1.0, 0.1)
                 return video
             
-            logger.info(f"🔥 Applying viral effects to {len(emphasis_moments)} emphasis moments")
+            # Analyze volume levels throughout the clip
+            volume_peaks = self._analyze_audio_volume(audio, duration)
+            if volume_peaks is None:
+                volume_peaks = []
             
+            logger.info(f"🔊 Found {len(volume_peaks)} volume peaks for reactive effects")
+            
+            for peak in volume_peaks:
+                peak_time = peak['time']
+                volume_level = peak['volume']  # 0.0 to 1.0
+                peak_duration = peak['duration']
+                
+                try:
+                    # Different effects based on volume intensity
+                    if volume_level > 0.9:
+                        # EXTREMELY LOUD - Light shake + subtle zoom (reduced intensity)
+                        intensity = min(volume_level * 0.04, 0.05)  # Much reduced shake intensity
+                        zoom_factor = 1.0 + (volume_level * 0.1)  # Much reduced zoom
+                        
+                        video = self._add_screen_shake_fl(video, peak_time, peak_duration, intensity=intensity)
+                        video = self._add_zoom_effect_fl(video, peak_time, peak_duration, zoom_factor=zoom_factor)
+                        effects_applied.append(f"LOUD@{peak_time:.1f}s(vol:{volume_level:.2f})")
+                        
+                    elif volume_level > 0.8:
+                        # VERY LOUD - Just subtle shake (no zoom, no flash)
+                        intensity = volume_level * 0.03
+                        
+                        video = self._add_screen_shake_fl(video, peak_time, peak_duration, intensity=intensity)
+                        effects_applied.append(f"SHAKE@{peak_time:.1f}s(vol:{volume_level:.2f})")
+                    else:
+                        # MODERATE LOUD - Just tiny zoom (very subtle)
+                        zoom_factor = 1.0 + (volume_level * 0.05)  # Very subtle zoom
+                        
+                        video = self._add_zoom_effect_fl(video, peak_time, peak_duration, zoom_factor=zoom_factor)
+                        effects_applied.append(f"ZOOM@{peak_time:.1f}s(vol:{volume_level:.2f})")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Audio-reactive effect at {peak_time:.1f}s failed: {e}")
+            
+            # BONUS: Add emphasis word effects for extra impact
+            emphasis_moments = [word for word in words if word.is_emphasis]
             for word in emphasis_moments:
-                effect_start = word.start_time
-                effect_duration = min(word.end_time - word.start_time, 0.5)  # Max 0.5s per effect
-                
-                # Determine effect type based on word
-                word_upper = word.text.upper()
-                
-                if any(trigger in word_upper for trigger in ['INSANE', 'CRAZY', 'WTF']):
-                    # MEGA EFFECTS - toned down for better experience
-                    video = self._add_screen_shake(video, effect_start, effect_duration, intensity=0.08)  # Reduced intensity
-                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.3)  # More reasonable zoom
-                    video = self._add_flash_effect(video, effect_start, 0.12)  # Shorter flash
-                    effects_applied.append(f"MEGA_EFFECT@{effect_start:.1f}s")
-                    
-                elif any(trigger in word_upper for trigger in ['CLUTCH', 'NO WAY', 'POGGERS']):
-                    # HYPE EFFECTS - balanced
-                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.2)  # Subtle zoom
-                    video = self._add_flash_effect(video, effect_start, 0.08)  # Quick flash
-                    effects_applied.append(f"HYPE_EFFECT@{effect_start:.1f}s")
-                    
-                elif any(trigger in word_upper for trigger in ['JYNXZI', 'SHEESH']):
-                    # GENTLE SHAKE for name mentions
-                    video = self._add_screen_shake(video, effect_start, effect_duration, intensity=0.05)  # Much gentler
-                    effects_applied.append(f"SHAKE@{effect_start:.1f}s")
-                
-                else:
-                    # Apply subtle effects to ANY emphasis word for testing
-                    video = self._add_flash_effect(video, effect_start, 0.06)  # Quick flash
-                    video = self._add_dramatic_zoom(video, effect_start, effect_duration, zoom_factor=1.15)  # Subtle zoom
-                    effects_applied.append(f"TEST_EFFECT@{effect_start:.1f}s")
+                try:
+                    # Add flash for emphasis words regardless of volume
+                    video = self._add_flash_effect(video, word.start_time, 0.06)
+                    effects_applied.append(f"WORD_FLASH@{word.start_time:.1f}s")
+                except Exception as e:
+                    logger.warning(f"⚠️ Emphasis effect failed: {e}")
             
-            logger.info(f"✨ Applied viral effects: {', '.join(effects_applied)}")
+            logger.info(f"🎵 Applied {len(effects_applied)} AUDIO-REACTIVE effects: {', '.join(effects_applied[:5])}{'...' if len(effects_applied) > 5 else ''}")
             return video
             
         except Exception as e:
-            logger.error(f"❌ Viral effects failed: {e}")
+            logger.error(f"❌ Audio-reactive effects failed: {e}")
             return video
+    
+    def _analyze_audio_volume(self, audio, duration):
+        """Analyze audio volume levels to find peaks for reactive effects"""
+        try:
+            import numpy as np
+            
+            # Sample the audio at regular intervals
+            sample_rate = 10  # Check volume 10 times per second
+            total_samples = int(duration * sample_rate)
+            volume_peaks = []
+            
+            logger.info(f"🎵 Analyzing {total_samples} audio samples...")
+            
+            for i in range(total_samples):
+                sample_time = i / sample_rate
+                if sample_time >= duration:
+                    break
+                
+                try:
+                    # Get audio chunk around this time (0.1s window)
+                    chunk_start = max(0, sample_time - 0.05)
+                    chunk_end = min(duration, sample_time + 0.05)
+                    
+                    # Extract audio data for this chunk
+                    audio_chunk = audio.subclip(chunk_start, chunk_end)
+                    audio_array = audio_chunk.to_soundarray()
+                    
+                    # Calculate RMS volume (root mean square)
+                    if len(audio_array) > 0:
+                        rms_volume = np.sqrt(np.mean(audio_array**2))
+                        
+                        # Normalize volume (typical speech is around 0.1-0.3 RMS)
+                        normalized_volume = min(rms_volume / 0.2, 1.0)  # Normalize to 0-1
+                        
+                        # Only consider significant volume changes (peaks) - MUCH LESS SENSITIVE
+                        if normalized_volume > 0.7:  # Even higher threshold for much fewer effects
+                            volume_peaks.append({
+                                'time': sample_time,
+                                'volume': normalized_volume,
+                                'duration': 0.3  # Effect duration
+                            })
+                            
+                except Exception as e:
+                    # Skip problematic samples
+                    continue
+            
+            # Filter peaks to avoid too many effects (more spacing)
+            filtered_peaks = []
+            last_peak_time = -1.5  # Start offset
+            
+            for peak in volume_peaks:
+                if peak['time'] - last_peak_time >= 2.5:  # At least 2.5 seconds apart - MUCH MORE SPACING
+                    filtered_peaks.append(peak)
+                    last_peak_time = peak['time']
+                elif peak['volume'] > 0.9:  # Only EXTREMELY loud moments can break spacing rule
+                    filtered_peaks.append(peak)
+                    last_peak_time = peak['time']
+            
+            logger.info(f"🔊 Filtered to {len(filtered_peaks)} volume peaks from {len(volume_peaks)} candidates")
+            return filtered_peaks
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Audio analysis failed: {e}")
+            # Fallback to some basic timing if audio analysis fails
+            fallback_peaks = [
+                {'time': 1.0, 'volume': 0.7, 'duration': 0.3},
+                {'time': duration * 0.5, 'volume': 0.8, 'duration': 0.3},
+                {'time': duration - 2.0, 'volume': 0.9, 'duration': 0.3}
+            ]
+            return [p for p in fallback_peaks if p['time'] > 0 and p['time'] < duration]
+        
+        # Ensure we always return a list
+        return volume_peaks if volume_peaks is not None else []
     
     def _add_dramatic_zoom(self, video, start_time: float, duration: float, zoom_factor: float = 1.2):
         """Add dramatic zoom effect during viral moments"""
@@ -760,20 +1182,108 @@ class ClipEnhancerV2:
             return video
     
     def _add_flash_effect(self, video, start_time: float, duration: float):
-        """Add BRIGHT white flash effect for emphasis"""
+        """Add flash effect using fx instead of composite overlay to avoid freezing"""
         try:
-            # Create BRIGHT white flash clip with fade
-            flash_clip = mp.ColorClip(
-                size=video.size, 
-                color=(255, 255, 255)
-            ).set_duration(duration).set_start(start_time).set_opacity(0.8).fadein(0.02).fadeout(0.05)
-            
             logger.info(f"⚡ Adding flash effect at {start_time:.1f}s for {duration:.2f}s")
             
-            # Composite with original video
-            return mp.CompositeVideoClip([video, flash_clip])
+            # Use video effects instead of overlay composition to avoid CompositeVideoClip issues
+            def flash_effect(get_frame, t):
+                frame = get_frame(t)
+                # Apply flash effect during the specified time window
+                if start_time <= t <= start_time + duration:
+                    # Calculate flash intensity (fade in/out)
+                    progress = (t - start_time) / duration
+                    if progress < 0.1:  # Fade in
+                        intensity = progress / 0.1
+                    elif progress > 0.9:  # Fade out  
+                        intensity = (1.0 - progress) / 0.1
+                    else:  # Full flash
+                        intensity = 1.0
+                    
+                    # Brighten the frame instead of overlaying white
+                    intensity = min(intensity * 0.3, 0.3)  # Max 30% brightness boost
+                    flash_frame = frame.astype(float)
+                    flash_frame = flash_frame + (255 - flash_frame) * intensity
+                    return flash_frame.astype('uint8')
+                
+                return frame
+            
+            return video.fl(flash_effect)
         except Exception as e:
             logger.warning(f"⚠️ Flash effect failed: {e}")
+            return video
+    
+    def _add_screen_shake_fl(self, video, start_time: float, duration: float, intensity: float = 0.05):
+        """Add screen shake using video.fl() instead of CompositeVideoClip"""
+        try:
+            def shake_effect(get_frame, t):
+                frame = get_frame(t)
+                if start_time <= t <= start_time + duration:
+                    progress = (t - start_time) / duration
+                    shake_intensity = intensity * math.sin(progress * math.pi * 15)  # Fast shake
+                    
+                    h, w = frame.shape[:2]
+                    offset_x = int(shake_intensity * w * random.uniform(-1, 1))
+                    offset_y = int(shake_intensity * h * random.uniform(-1, 1))
+                    
+                    # Create shaken frame by shifting
+                    shaken = np.zeros_like(frame)
+                    
+                    # Calculate bounds to avoid out-of-bounds
+                    src_x1 = max(0, -offset_x)
+                    src_y1 = max(0, -offset_y)
+                    src_x2 = min(w, w - offset_x)
+                    src_y2 = min(h, h - offset_y)
+                    
+                    dst_x1 = max(0, offset_x)
+                    dst_y1 = max(0, offset_y)
+                    dst_x2 = dst_x1 + (src_x2 - src_x1)
+                    dst_y2 = dst_y1 + (src_y2 - src_y1)
+                    
+                    if src_x2 > src_x1 and src_y2 > src_y1 and dst_x2 <= w and dst_y2 <= h:
+                        shaken[dst_y1:dst_y2, dst_x1:dst_x2] = frame[src_y1:src_y2, src_x1:src_x2]
+                        return shaken
+                
+                return frame
+            
+            return video.fl(shake_effect)
+        except Exception as e:
+            logger.warning(f"⚠️ Shake FL effect failed: {e}")
+            return video
+    
+    def _add_zoom_effect_fl(self, video, start_time: float, duration: float, zoom_factor: float = 1.2):
+        """Add zoom effect using video.fl() instead of CompositeVideoClip"""
+        try:
+            def zoom_effect(get_frame, t):
+                frame = get_frame(t)
+                if start_time <= t <= start_time + duration:
+                    progress = (t - start_time) / duration
+                    # Smooth zoom in and out
+                    current_zoom = 1.0 + (zoom_factor - 1.0) * math.sin(progress * math.pi)
+                    
+                    h, w = frame.shape[:2]
+                    center_x, center_y = w // 2, h // 2
+                    
+                    # Calculate new dimensions
+                    new_w = int(w / current_zoom)
+                    new_h = int(h / current_zoom)
+                    
+                    # Calculate crop region (centered)
+                    x1 = max(0, center_x - new_w // 2)
+                    y1 = max(0, center_y - new_h // 2)
+                    x2 = min(w, x1 + new_w)
+                    y2 = min(h, y1 + new_h)
+                    
+                    # Crop and resize back to original size
+                    cropped = frame[y1:y2, x1:x2]
+                    zoomed = cv2.resize(cropped, (w, h))
+                    return zoomed
+                
+                return frame
+            
+            return video.fl(zoom_effect)
+        except Exception as e:
+            logger.warning(f"⚠️ Zoom FL effect failed: {e}")
             return video
     
     def _apply_volume_based_effects(self, video, clip_path: Path, viral_config: Dict):
@@ -1053,16 +1563,19 @@ class ClipEnhancerV2:
             logger.warning(f"⚠️ Emotion text failed: {e}")
             return video
     
-    def _transcribe_audio(self, clip_path: Path) -> Optional[List[Dict]]:
+    def _transcribe_audio(self, clip_path: Path, fast_mode: bool = False) -> Optional[List[Dict]]:
         """Transcribe audio using Whisper"""
         if not WHISPER_AVAILABLE:
             logger.warning("⚠️ Whisper not available, skipping transcription")
             return None
         
         try:
+            # Choose model based on performance requirements
+            model_name = "tiny" if fast_mode else "tiny"  # Even "tiny" is quite good for short clips
+            
             if self.whisper_model is None:
-                logger.info("🤖 Loading Whisper model (fast mode)...")
-                self.whisper_model = whisper.load_model("tiny")  # Much faster than "base"
+                logger.info(f"🤖 Loading Whisper model: {model_name}")
+                self.whisper_model = whisper.load_model(model_name)
             
             result = self.whisper_model.transcribe(str(clip_path))
             
@@ -1334,9 +1847,52 @@ class ClipEnhancerV2:
                 telemetry['end_slate'] = True
         
         if len(composites) > 1:
-            video = mp.CompositeVideoClip(composites)
+            logger.info(f"🏷️ Applying branding using video.fl() method")
+            video = self._apply_branding_with_fl(video, branding_config, streamer_name)
         
         return video, telemetry
+    
+    def _apply_branding_with_fl(self, video, branding_config: Dict, streamer_name: str):
+        """Apply watermark and branding using video.fl() to avoid CompositeVideoClip freezing"""
+        try:
+            import cv2
+            import numpy as np
+            
+            watermark_config = branding_config.get('watermark', {})
+            if not watermark_config.get('enabled', False):
+                return video
+                
+            watermark_text = watermark_config.get('handle_text', f'@{streamer_name}_clippy')
+            
+            def watermark_effect(get_frame, t):
+                frame = get_frame(t)
+                frame_height, frame_width = frame.shape[:2]
+                
+                # Watermark styling
+                font_size = 0.6
+                font_color = (255, 255, 255)  # White
+                stroke_color = (0, 0, 0)  # Black outline
+                stroke_width = 2
+                
+                # Position watermark in bottom-right corner
+                text_size = cv2.getTextSize(watermark_text, cv2.FONT_HERSHEY_SIMPLEX, font_size, stroke_width)[0]
+                x_pos = frame_width - text_size[0] - 20
+                y_pos = frame_height - 20
+                
+                # Draw watermark with outline
+                cv2.putText(frame, watermark_text, (x_pos, y_pos), 
+                          cv2.FONT_HERSHEY_SIMPLEX, font_size, stroke_color, stroke_width + 1)
+                cv2.putText(frame, watermark_text, (x_pos, y_pos), 
+                          cv2.FONT_HERSHEY_SIMPLEX, font_size, font_color, stroke_width)
+                
+                return frame
+            
+            logger.info(f"✅ Applied watermark '{watermark_text}' using video.fl() method")
+            return video.fl(watermark_effect)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Branding FL effect failed: {e}")
+            return video
     
     def _create_watermark(self, watermark_config: Dict, streamer_name: str, video_size: Tuple[int, int], duration: float) -> Optional[Any]:
         """Create watermark overlay"""
@@ -1439,18 +1995,137 @@ class ClipEnhancerV2:
         codec = platform_config.get('output_codec', 'libx264')
         crf = platform_config.get('output_crf', 18)
         preset = platform_config.get('output_preset', 'veryfast')
+        performance_mode = platform_config.get('performance_mode', 'balanced')
         
-        # Export video with faster settings
-        video.write_videofile(
-            str(output_path),
-            codec=codec,
-            preset='ultrafast',  # Much faster encoding
-            ffmpeg_params=['-crf', str(crf)],
-            audio_codec='aac',
-            threads=4  # Use multiple CPU cores
-        )
+        # Adjust settings based on performance mode
+        if performance_mode == 'realtime':
+            preset = 'ultrafast'
+            crf = 28  # Lower quality for maximum speed
+            threads = 8  # More threads
+        elif performance_mode == 'fast':
+            preset = 'ultrafast'  # Changed from superfast to ultrafast
+            crf = 25  # Lower quality for speed
+            threads = 8  # More threads
+        else:
+            preset = 'superfast'  # Changed from veryfast to superfast
+            crf = 23  # Slightly lower quality
+            threads = 6  # More threads
+        
+        logger.info(f"⚡ Rendering with preset: {preset}, CRF: {crf}, threads: {threads}")
+        
+        # Export video with optimized settings and timeout protection
+        import signal
+        import threading
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Video rendering timed out")
+        
+        def render_with_timeout():
+            # Ensure we're in the correct directory to avoid temp files in root
+            import os
+            original_cwd = os.getcwd()
+            temp_dir = output_path.parent  # Use the output directory for temp files
+            
+            try:
+                # Change to output directory so temp files go there
+                os.chdir(temp_dir)
+                
+                video.write_videofile(
+                    output_path.name,  # Use just filename since we're in the right directory
+                    codec=codec,
+                    preset=preset,
+                    ffmpeg_params=['-crf', str(crf), '-threads', str(threads)],
+                    audio_codec='aac',
+                    verbose=True,  # Show progress bar
+                    logger='bar',  # Enable progress bar
+                    temp_audiofile=f'TEMP_MPY_wvf_snd_{output_path.stem}.mp4'  # Custom temp name
+                )
+            finally:
+                # Always restore original directory
+                os.chdir(original_cwd)
+        
+        try:
+            # Set a 10-minute timeout for rendering (Windows-compatible)
+            import time
+            start_time = time.time()
+            timeout_seconds = 600  # 10 minutes
+            
+            def check_timeout():
+                if time.time() - start_time > timeout_seconds:
+                    logger.error("❌ Rendering timeout after 10 minutes - killing process")
+                    os._exit(1)
+            
+            # Start timeout monitor thread
+            timeout_thread = threading.Thread(target=lambda: [time.sleep(1), check_timeout()] * timeout_seconds, daemon=True)
+            timeout_thread.start()
+            
+            render_with_timeout()
+                
+        except (TimeoutError, KeyboardInterrupt) as e:
+            logger.error(f"❌ Rendering interrupted: {e}")
+            if hasattr(signal, 'alarm'):
+                signal.alarm(0)
+            # Try simpler rendering without complex composites
+            logger.info("🔄 Attempting fallback rendering...")
+            try:
+                # Use only the base video without overlays
+                base_video = video
+                if hasattr(video, 'clips') and len(video.clips) > 0:
+                    base_video = video.clips[0]  # Get the first/main clip
+                # Use same directory approach for fallback
+                import os
+                original_cwd = os.getcwd()
+                temp_dir = output_path.parent
+                
+                try:
+                    os.chdir(temp_dir)
+                    base_video.write_videofile(
+                        output_path.name,
+                        codec='libx264',
+                        preset='veryfast',
+                        ffmpeg_params=['-crf', '23'],
+                        audio_codec='aac',
+                        threads=2,
+                        verbose=False,
+                        logger=None,
+                        temp_audiofile=f'TEMP_MPY_fallback_{output_path.stem}.mp4'
+                    )
+                finally:
+                    os.chdir(original_cwd)
+                logger.info("✅ Fallback rendering succeeded")
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback rendering also failed: {fallback_error}")
+                raise
         
         logger.info(f"💾 Video rendered: {output_path}")
+        
+        # Clean up any temp files that might have been created in root
+        self._cleanup_temp_files()
+    
+    def _cleanup_temp_files(self):
+        """Clean up any temporary MoviePy files that ended up in the wrong location"""
+        try:
+            import os
+            import glob
+            
+            # Find and remove temp files in root directory
+            temp_patterns = [
+                'enhanced_*TEMP_MPY_*.mp4',
+                '*TEMP_MPY_wvf_snd.mp4',
+                '*TEMP_MPY_fallback_*.mp4'
+            ]
+            
+            for pattern in temp_patterns:
+                temp_files = glob.glob(pattern)
+                for temp_file in temp_files:
+                    try:
+                        os.remove(temp_file)
+                        logger.info(f"🧹 Cleaned up temp file: {temp_file}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not remove temp file {temp_file}: {e}")
+                        
+        except Exception as e:
+            logger.warning(f"⚠️ Cleanup failed: {e}")
 
 
 def check_dependencies():

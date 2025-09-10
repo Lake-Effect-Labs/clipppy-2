@@ -167,6 +167,13 @@ class AlwaysOnController:
                 stream_data = data['data'][0]
                 status.game_name = stream_data.get('game_name', 'Unknown')
                 status.viewer_count = stream_data.get('viewer_count', 0)
+                
+                # Special handling for "I'm Only Sleeping" - treat as offline
+                if status.game_name == "I'm Only Sleeping":
+                    logger.info(f"😴 {streamer_name} is in 'I'm Only Sleeping' mode - treating as offline")
+                    status.last_checked = datetime.now()
+                    return False
+                
                 logger.info(f"🔴 {streamer_name} is LIVE - {status.game_name} ({status.viewer_count:,} viewers)")
             else:
                 logger.info(f"⚫ {streamer_name} is offline")
@@ -178,18 +185,38 @@ class AlwaysOnController:
             
         except Exception as e:
             logger.error(f"❌ Failed to check {streamer_name} status: {e}")
+            # If we can't check status due to network error, assume offline
+            if "Failed to resolve" in str(e) or "Max retries exceeded" in str(e):
+                logger.warning(f"🌐 Network error checking {streamer_name} - assuming offline")
+                return False
             return False
     
     def spawn_listener(self, streamer_name: str):
         """Spawn a listener process for a live streamer in a new PowerShell window"""
         try:
-            # Create PowerShell command to open new window with the listener
-            ps_cmd = f"cd '{os.getcwd()}'; python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode"
+            status = self.streamer_status[streamer_name]
             
-            # Use Start-Process to create a new visible PowerShell window
+            # Check if listener is already running by searching for the process
+            import psutil
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if 'python' in proc.info['name'].lower() and proc.info['cmdline']:
+                        cmdline = ' '.join(proc.info['cmdline'])
+                        if 'twitch_clip_bot.py' in cmdline and f'--streamer {streamer_name}' in cmdline:
+                            logger.info(f"✅ Listener for {streamer_name} is already running (PID: {proc.info['pid']})")
+                            return
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # Create PowerShell command to open new window with the listener
+            working_dir = os.getcwd()
+            window_title = f"Clipppy - {streamer_name.upper()}"
+            ps_cmd = f"Set-Location '{working_dir}'; python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode"
+            
+            # Use Start-Process to create a new visible PowerShell window with custom title
             cmd = [
                 'powershell', '-Command',
-                f"Start-Process powershell -ArgumentList '-NoExit', '-Command', \"{ps_cmd}\""
+                f'Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd \'{working_dir}\'; $Host.UI.RawUI.WindowTitle = \'{window_title}\'; python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode"'
             ]
             
             process = subprocess.Popen(
@@ -205,22 +232,52 @@ class AlwaysOnController:
             import time
             time.sleep(2)
             
-            self.streamer_status[streamer_name].listener_process = process
+            status.listener_process = process
             logger.info(f"🚀 Spawned visible PowerShell listener for {streamer_name} (PID: {process.pid})")
             
         except Exception as e:
             logger.error(f"❌ Failed to spawn listener for {streamer_name}: {e}")
     
     def kill_listener(self, streamer_name: str):
-        """Kill the listener process for a streamer"""
+        """Kill the listener process for a streamer and close PowerShell windows"""
         try:
             status = self.streamer_status[streamer_name]
             if status.listener_process:
+                # First try to gracefully terminate
                 status.listener_process.terminate()
                 try:
-                    status.listener_process.wait(timeout=10)
+                    status.listener_process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     status.listener_process.kill()
+                
+                # Kill any python processes and PowerShell windows for this streamer
+                try:
+                    window_title = f"Clipppy - {streamer_name.upper()}"
+                    
+                    # Method 1: Kill PowerShell windows by title
+                    subprocess.run([
+                        'taskkill', '/F', '/FI', 
+                        f'WINDOWTITLE eq {window_title}'
+                    ], capture_output=True, timeout=5)
+                    
+                    # Method 2: Use taskkill to kill python processes with specific command line
+                    subprocess.run([
+                        'taskkill', '/F', '/FI', 
+                        f'IMAGENAME eq python.exe', '/FI',
+                        f'COMMANDLINE eq *{streamer_name}*'
+                    ], capture_output=True, timeout=5)
+                    
+                    # Method 3: Use wmic as backup for any remaining processes
+                    subprocess.run([
+                        'wmic', 'process', 'where', 
+                        f'(name="python.exe" or name="powershell.exe") and commandline like "%{streamer_name}%"',
+                        'delete'
+                    ], capture_output=True, timeout=5)
+                    
+                    logger.info(f"✅ Cleaned up all processes for {streamer_name}")
+                    
+                except Exception as cleanup_error:
+                    logger.warning(f"⚠️ Cleanup warning for {streamer_name}: {cleanup_error}")
                 
                 logger.info(f"💀 Killed listener for {streamer_name}")
                 status.listener_process = None
@@ -296,6 +353,12 @@ class AlwaysOnController:
         worker.start()
         logger.info("📱 Started TikTok posting worker")
     
+    def start_queue_monitor(self):
+        """Start file-based queue monitor for listener communications"""
+        monitor = threading.Thread(target=self._queue_monitor, daemon=True)
+        monitor.start()
+        logger.info("📂 Started enhancement queue monitor")
+    
     def _tiktok_poster(self):
         """Background TikTok posting worker"""
         logger.info("📱 TikTok posting worker started")
@@ -328,6 +391,54 @@ class AlwaysOnController:
                 continue
             except Exception as e:
                 logger.error(f"❌ TikTok posting error: {e}")
+    
+    def _queue_monitor(self):
+        """Monitor file-based enhancement queue from listeners"""
+        import os
+        import json
+        import time
+        
+        logger.info("📂 Enhancement queue monitor started")
+        queue_dir = "data/enhancement_queue"
+        os.makedirs(queue_dir, exist_ok=True)
+        
+        while self.running:
+            try:
+                # Check for new queue files
+                queue_files = [f for f in os.listdir(queue_dir) if f.endswith('.json')]
+                
+                for queue_file in queue_files:
+                    file_path = os.path.join(queue_dir, queue_file)
+                    
+                    try:
+                        # Read and parse the queue file
+                        with open(file_path, 'r') as f:
+                            job_data = json.load(f)
+                        
+                        # Add to enhancement queue
+                        self.enhancement_queue.put(job_data)
+                        
+                        # Remove processed file
+                        os.remove(file_path)
+                        
+                        logger.info(f"📂 Queued clip from {job_data['streamer_name']}: {job_data['clip_url']}")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Failed to process queue file {queue_file}: {e}")
+                        # Move problematic file to avoid infinite loop
+                        try:
+                            os.rename(file_path, file_path + '.error')
+                        except:
+                            pass
+                
+                # Sleep before next check
+                time.sleep(2)
+                
+            except Exception as e:
+                logger.error(f"❌ Queue monitor error: {e}")
+                time.sleep(5)
+        
+        logger.info("📂 Enhancement queue monitor stopped")
     
     def generate_tiktok_caption(self, streamer_name: str, streamer_handle: str, game_name: str) -> str:
         """Generate TikTok caption with streamer info and game hashtags"""
@@ -431,10 +542,9 @@ class AlwaysOnController:
                 self.kill_listener(streamer_name)
             
             elif current_live and previous_live:
-                # Still live - check if listener is running
-                if not status.listener_process or status.listener_process.poll() is not None:
-                    logger.info(f"🔄 {streamer_name} listener died, respawning...")
-                    self.spawn_listener(streamer_name)
+                # Still live - but don't respawn unless we're sure the listener is dead
+                # The spawn_listener method has its own duplicate checking via process search
+                pass
             
             # Update the status after handling state changes
             status.is_live = current_live
@@ -457,6 +567,7 @@ class AlwaysOnController:
         self.running = True
         self.start_enhancement_workers()
         self.start_tiktok_poster()
+        self.start_queue_monitor()
         
         # Main monitoring loop
         try:
@@ -485,18 +596,36 @@ class AlwaysOnController:
             await self.shutdown()
     
     async def shutdown(self):
-        """Clean shutdown"""
+        """Clean shutdown with proper process termination"""
         logger.info("🛑 Shutting down Always-On Controller...")
-        
         self.running = False
         
-        # Kill all listener processes
+        # Kill all listener processes and close their PowerShell windows
         for streamer_name in self.streamer_status:
             self.kill_listener(streamer_name)
         
-        # Signal workers to stop
+        # Give processes time to clean up
+        import time
+        time.sleep(2)
+        
+        # Force kill any remaining PowerShell processes for our project
+        try:
+            import subprocess
+            # Find and kill PowerShell processes running our bot
+            result = subprocess.run([
+                'powershell', '-Command',
+                "Get-Process powershell | Where-Object {$_.CommandLine -like '*twitch_clip_bot.py*'} | Stop-Process -Force"
+            ], capture_output=True, text=True, timeout=10)
+            logger.info("💀 Cleaned up PowerShell listener processes")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not force clean PowerShell processes: {e}")
+        
+        # Stop background workers
+        logger.info("🛑 Stopping enhancement workers...")
         for _ in self.enhancement_workers:
             self.enhancement_queue.put(None)
+        
+        logger.info("🛑 Stopping TikTok poster...")
         self.tiktok_posting_queue.put(None)
         
         logger.info("✅ Shutdown complete")

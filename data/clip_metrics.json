@@ -1,0 +1,70 @@
+[
+  {
+    "clip_id": "test_clip_001",
+    "streamer_name": "jynxzi",
+    "created_at": 1756951713.2139683,
+    "input_signals": {
+      "components": {
+        "chat": 0.8,
+        "viewer": 0.6,
+        "events": 0.4,
+        "keyword": 0.9,
+        "sentiment": 0.3,
+        "emote": 0.7
+      },
+      "z": {
+        "chat": 2.1,
+        "kw": 2.3,
+        "sent": 0.8
+      }
+    },
+    "decision_flags": {
+      "core_ok": 3,
+      "final_score": 1.45,
+      "profile": "gaming",
+      "threshold": 1.35
+    },
+    "views_1h": null,
+    "views_6h": null,
+    "views_24h": 75000,
+    "likes": 1200,
+    "comments": null,
+    "shares": null,
+    "completion_rate": 0.68,
+    "is_hit": true
+  },
+  {
+    "clip_id": "test_clip_001",
+    "streamer_name": "jynxzi",
+    "created_at": 1756952161.8272107,
+    "input_signals": {
+      "components": {
+        "chat": 0.8,
+        "viewer": 0.6,
+        "events": 0.4,
+        "keyword": 0.9,
+        "sentiment": 0.3,
+        "emote": 0.7
+      },
+      "z": {
+        "chat": 2.1,
+        "kw": 2.3,
+        "sent": 0.8
+      }
+    },
+    "decision_flags": {
+      "core_ok": 3,
+      "final_score": 1.45,
+      "profile": "gaming",
+      "threshold": 1.35
+    },
+    "views_1h": null,
+    "views_6h": null,
+    "views_24h": null,
+    "likes": null,
+    "comments": null,
+    "shares": null,
+    "completion_rate": null,
+    "is_hit": null
+  }
+]

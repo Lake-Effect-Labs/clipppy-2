@@ -1,0 +1,203 @@
+# Clipppy AI-Powered Twitch Clip Bot - Cursor Rules
+
+## 🎯 Project Overview
+Clipppy is an AI-powered Twitch clip bot that automatically detects viral moments, creates clips, enhances them with effects/captions, and posts to TikTok. The system monitors multiple streamers simultaneously with sophisticated viral detection algorithms.
+
+## 🚨 CRITICAL PRINCIPLES - READ FIRST
+
+### 0. **ONLY MAKE CHANGES WHEN EXPLICITLY REQUESTED**
+- **NEVER make code changes unless the user specifically asks for them**
+- **NEVER make "improvements" or "fixes" without explicit permission**
+- **If you see issues, DESCRIBE them but don't fix them unless asked**
+- **Analysis requests ≠ Change requests**
+- **Ask permission before making any modifications**
+
+### 1. **FIX ROOT CAUSES, NOT SYMPTOMS**
+- **NEVER create workarounds or new code paths to avoid fixing core issues**
+- **ALWAYS identify and fix the underlying problem**
+- Example: Don't disable features to make something work - fix why it's broken
+- Example: Don't create streamer-specific hacks - fix the general system
+- **Ask yourself: "Am I solving the root problem or creating technical debt?"**
+
+### 2. **AVOID CODE BLOAT**
+- **NEVER create new files when existing ones can be modified**
+- **DELETE temporary test files immediately after use**
+- **Consolidate similar functionality instead of duplicating**
+- **Prefer editing existing systems over building parallel ones**
+
+### 3. **NO REGRESSION**
+- **ALWAYS understand what existing code does before changing it**
+- **Test critical paths after changes**
+- **Preserve working functionality while fixing bugs**
+- **If something worked before, make sure it still works after**
+
+## 📁 Core Architecture
+
+### Key Files & Their Purposes:
+- `always_on_controller.py` - Master controller, manages multiple streamers
+- `twitch_clip_bot.py` - Individual streamer monitoring & clip creation
+- `viral_detector.py` - TikTok-optimized viral moment detection
+- `clip_enhancer_v2.py` - Video enhancement with effects/captions
+- `config/config.yaml` - All configuration (streamers, thresholds, settings)
+- `tiktok_uploader.py` - TikTok posting automation
+
+### Data Flow:
+1. Controller spawns listeners for live streamers
+2. Listeners monitor chat/metrics via viral detector
+3. Viral moments trigger clip creation via Twitch API
+4. Clips queued for enhancement (effects, captions, smart cropping)
+5. Enhanced clips posted to TikTok with auto-generated captions
+
+## 🛠️ Development Guidelines
+
+### Problem-Solving Approach:
+1. **Diagnose thoroughly** - Use logs, debug output, systematic testing
+2. **Identify root cause** - Don't fix symptoms, fix the underlying issue
+3. **Implement minimal fix** - Change as little as possible to solve the problem
+4. **Verify no regression** - Ensure existing functionality still works
+5. **Clean up** - Remove any temporary debugging code/files
+
+### Code Quality Standards:
+- **Use existing patterns** - Follow established code style in the file
+- **Preserve error handling** - Don't remove try/catch blocks
+- **Maintain logging** - Keep informative log messages
+- **Update documentation** - Modify comments when changing behavior
+
+### Configuration Management:
+- **All settings go in `config/config.yaml`** - No hardcoded values
+- **Per-streamer overrides supported** - Use the existing override system
+- **Test with realistic values** - Don't use extreme test values in production
+
+## 🎬 Video Enhancement System
+
+### MoviePy Best Practices:
+- **Use `video.fl()` for frame manipulation** - Avoids freezing issues
+- **Avoid nested `CompositeVideoClip`** - Causes rendering problems
+- **Use OpenCV for text/overlays** - More reliable than MoviePy text
+- **Set working directory** - Prevents temp files in wrong locations
+- **Clean up temp files** - MoviePy leaves artifacts
+
+### Smart Crop System:
+- **Use intelligent layout detection** - Don't hardcode streamer layouts
+- **Analyze face positions and motion** - Determine optimal crop regions
+- **Fall back gracefully** - Handle edge cases without crashing
+
+## 🔍 Viral Detection System
+
+### Key Concepts:
+- **Multi-signal agreement** - Require multiple indicators for clips
+- **Quality gates** - Minimum chatters, engagement, viewer thresholds
+- **Adaptive thresholds** - Adjust based on stream duration and targets
+- **Novelty detection** - Prevent duplicate clips via simhash
+- **TikTok-native signals** - Keyword bursts, emote density, sentiment
+
+### Tuning Guidelines:
+- **Start conservative** - High thresholds, then relax if needed
+- **Monitor clip frequency** - Aim for ~10 quality clips/day across all streamers
+- **Balance quality vs quantity** - Better to have fewer good clips than many poor ones
+- **Respect API limits** - Twitch allows 5 clips per 5 minutes per broadcaster
+
+## 🐛 Common Issues & Solutions
+
+### PowerShell/Process Management:
+- **Use proper PowerShell syntax** - `$Host.UI.RawUI.WindowTitle` for titles
+- **Kill processes thoroughly** - Use multiple methods (taskkill, wmic)
+- **Handle process death** - Respawn listeners when they die
+
+### Rate Limiting:
+- **Respect Twitch API limits** - 30+ minute cooldowns between clips per streamer
+- **Handle 403 errors gracefully** - Increase cooldowns if hitting limits
+- **Monitor daily quotas** - Track clips per day per streamer
+
+### Enhancement Performance:
+- **Use performance modes** - Fast Whisper models, optimized presets
+- **Optimize video settings** - Lower CRF, faster presets for speed
+- **Parallel processing** - Multiple enhancement workers
+- **Progress feedback** - Show progress bars for long operations
+
+## 📊 Debugging & Monitoring
+
+### Debug Logging:
+- **Comprehensive viral debug logs** - Show scores, components, thresholds
+- **Quality check details** - Why clips were/weren't created
+- **Performance metrics** - Enhancement times, success rates
+- **Error context** - Full stack traces with relevant state
+
+### Health Monitoring:
+- **Listener health checks** - Detect and respawn dead processes
+- **Queue monitoring** - Track enhancement backlog
+- **API status** - Monitor authentication and rate limits
+- **Clip success rates** - Track creation vs enhancement success
+
+## 🧹 Maintenance Tasks
+
+### Regular Cleanup:
+- **Delete temp files** - MoviePy artifacts, test files
+- **Rotate logs** - Prevent disk space issues
+- **Clean clip directories** - Remove old processed clips
+- **Update dependencies** - Keep libraries current
+
+### Configuration Review:
+- **Audit thresholds** - Ensure appropriate clip frequency
+- **Review streamer settings** - Add/remove streamers as needed
+- **Check API tokens** - Refresh before expiration
+- **Validate file paths** - Ensure directories exist
+
+## 🚀 Deployment & Operations
+
+### Production Readiness:
+- **Test end-to-end** - Full workflow from detection to TikTok
+- **Monitor for 24+ hours** - Ensure stability over time
+- **Have rollback plan** - Keep working config versions
+- **Document changes** - Update this file with new learnings
+
+### Performance Optimization:
+- **Profile bottlenecks** - Identify slow operations
+- **Optimize hot paths** - Focus on frequently executed code
+- **Scale horizontally** - Add more enhancement workers if needed
+- **Monitor resource usage** - CPU, memory, disk space
+
+## 🎯 Success Metrics
+
+### Quality Indicators:
+- **~10 clips per day** across all streamers
+- **<5 minute enhancement time** per 30-second clip
+- **>90% enhancement success rate**
+- **Zero system crashes** over 24-hour periods
+- **Proper cleanup** - No temp files or zombie processes
+
+### User Experience:
+- **Clear progress feedback** - Users know what's happening
+- **Informative error messages** - Help users understand issues
+- **Reliable operation** - System works without constant intervention
+- **Quality output** - Clips are engaging and properly formatted
+
+## 📝 When Making Changes
+
+### Before You Start:
+1. **Read the relevant code** - Understand current implementation
+2. **Check recent changes** - Review git history for context
+3. **Identify dependencies** - What else might be affected?
+4. **Plan minimal change** - Smallest possible fix
+
+### During Development:
+1. **Test incrementally** - Verify each change works
+2. **Preserve existing behavior** - Don't break working features
+3. **Add appropriate logging** - Help future debugging
+4. **Update configuration** - Modify config files as needed
+
+### Before Committing:
+1. **Clean up temp files** - Delete any test/debug files
+2. **Test full workflow** - End-to-end functionality
+3. **Check for regressions** - Ensure nothing broke
+4. **Update documentation** - Modify comments/docs as needed
+
+## 🎪 Remember: This is a Production System
+
+Users depend on Clipppy to automatically create viral TikTok content. Every change should:
+- **Improve reliability** - Make the system more stable
+- **Enhance quality** - Better clips, fewer false positives
+- **Maintain performance** - Don't slow down critical paths
+- **Preserve functionality** - Don't break existing features
+
+**When in doubt, ask yourself: "Would I trust this change in a system that needs to run 24/7?"**

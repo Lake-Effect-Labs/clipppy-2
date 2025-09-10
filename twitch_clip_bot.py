@@ -41,11 +41,16 @@ except ImportError as e:
     TikTokUploader = None
     ViralDetector = None
 
-# Configure logging
+# Suppress TensorFlow warnings for cleaner output
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '1')  # Suppress TF INFO messages
+
+# Configure logging with cleaner format
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
@@ -94,6 +99,7 @@ class TwitchClipBot:
         # Always-on mode integration
         self.always_on_mode = False
         self.controller_enhancement_queue = None
+        self.enhancement_queue_file = None  # File-based queue communication
     
     def start_enhancement_worker(self):
         """Start the background enhancement worker thread"""
@@ -115,7 +121,7 @@ class TwitchClipBot:
     
     def _enhancement_worker(self):
         """Background worker that processes enhancement queue"""
-        logger.info("⚡ Enhancement worker started")
+        logger.info("⚡ Enhancement worker ready")
         while self.enhancement_running:
             try:
                 # Get next enhancement job (block for up to 1 second)
@@ -139,8 +145,51 @@ class TwitchClipBot:
         
         logger.info("🏁 Enhancement worker stopped")
     
+    def _send_clip_to_controller(self, clip_url: str, reason: str):
+        """Send clip to central controller for enhancement"""
+        try:
+            import json
+            import os
+            from datetime import datetime
+            
+            # Create queue directory if it doesn't exist
+            queue_dir = "data/enhancement_queue"
+            os.makedirs(queue_dir, exist_ok=True)
+            
+            # Create clip job data
+            # Get current game name from stream data
+            current_game = 'Unknown'
+            try:
+                stream_data = self.get_stream_data()
+                if stream_data:
+                    current_game = stream_data.get('game_name', 'Unknown')
+            except Exception:
+                pass
+            
+            job_data = {
+                'clip_url': clip_url,
+                'streamer_name': self.current_streamer.get('name'),
+                'streamer_handle': self.current_streamer.get('twitch_username'),
+                'game_name': current_game,
+                'reason': reason,
+                'timestamp': datetime.now().isoformat(),
+                'streamer_config': self.current_streamer
+            }
+            
+            # Write to queue file
+            timestamp = int(datetime.now().timestamp())
+            queue_file = os.path.join(queue_dir, f"clip_{timestamp}_{self.current_streamer.get('name', 'unknown')}.json")
+            
+            with open(queue_file, 'w') as f:
+                json.dump(job_data, f, indent=2)
+            
+            logger.info(f"📤 Sent clip to central queue: {queue_file}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to send clip to controller: {e}")
+    
     def _process_enhancement(self, clip_url: str, reason: str):
-        """Process a single enhancement job"""
+        """Process a single enhancement job (standalone mode only)"""
         try:
             if self.clip_enhancer_v2:
                 # Download clip first using v1 enhancer
@@ -190,9 +239,10 @@ class TwitchClipBot:
         self.current_streamer = streamer_config
         
         # Initialize viral detector for this streamer if using advanced algorithm
-        if self.viral_detector and self.config.get('global', {}).get('use_test_virality_alg', False):
-            self.viral_detector.set_current_streamer(streamer_config)
+        if self.viral_detector:
+            self.viral_detector.configure_for_streamer(streamer_config.get('name', ''))
             self.viral_detector.set_stream_status(True)  # Assume we're starting monitoring because stream is live
+            logger.info(f"🧪 Viral detector configured for {streamer_config.get('name', 'unknown')} | Stream start time set: {self.viral_detector.stream_start_time}")
         
     async def authenticate(self) -> bool:
         """Get OAuth access token from Twitch API"""
@@ -260,6 +310,10 @@ class TwitchClipBot:
                 
         except requests.RequestException as e:
             logger.error(f"Failed to get stream data: {e}")
+            # If we can't reach Twitch API, consider stream offline for safety
+            if "Failed to resolve" in str(e) or "Max retries exceeded" in str(e):
+                logger.info("⚫ Network error - treating as offline")
+                return None
             return None
     
     async def monitor_chat(self, broadcaster_name: str):
@@ -273,7 +327,7 @@ class TwitchClipBot:
                 await websocket.send("NICK justinfan12345")  # Anonymous connection
                 await websocket.send(f"JOIN #{broadcaster_name}")
                 
-                logger.info(f"Connected to chat for #{broadcaster_name}")
+                logger.info(f"💬 Chat connected: #{broadcaster_name}")
                 
                 async for message in websocket:
                     if message.startswith("PING"):
@@ -364,6 +418,9 @@ class TwitchClipBot:
             # Use advanced viral detection algorithm
             should_clip, reason, breakdown = self.viral_detector.should_create_clip()
             
+            # DEBUG LOGGING - Remove after testing
+            logger.info(f"🧪 VIRAL CHECK | Result: {should_clip} | {reason}")
+            
             if should_clip:
                 # Log detailed breakdown for analysis
                 logger.info(f"🔥 Viral algorithm breakdown:")
@@ -434,13 +491,17 @@ class TwitchClipBot:
                 # Auto-enhance clip if enabled - add to queue for non-blocking processing
                 if self.auto_enhance and self.clip_enhancer_v2:
                     try:
-                        # Add to enhancement queue instead of blocking
-                        queue_size = self.enhancement_queue.qsize()
-                        self.enhancement_queue.put((clip_url, reason))
-                        logger.info(f"📋 Added clip to enhancement queue (position {queue_size + 1})")
+                        if self.always_on_mode:
+                            # In always-on mode, send clip to central controller queue
+                            self._send_clip_to_controller(clip_url, reason)
+                        else:
+                            # Standalone mode, process locally
+                            queue_size = self.enhancement_queue.qsize()
+                            self.enhancement_queue.put((clip_url, reason))
+                            logger.info(f"📋 Added clip to local enhancement queue (position {queue_size + 1})")
                         
-                        # Start worker if not running
-                        if not self.enhancement_running:
+                        # Start worker if not running (only in standalone mode)
+                        if not self.enhancement_running and not self.always_on_mode:
                             self.start_enhancement_worker()
                             
                     except Exception as e:
@@ -484,9 +545,13 @@ class TwitchClipBot:
                 stream_data = self.get_stream_data()
                 
                 if stream_data is None:
-                    logger.info("Stream is offline, waiting...")
-                    await asyncio.sleep(30)
-                    continue
+                    if self.always_on_mode:
+                        logger.info("⚫ Stream went offline - shutting down listener")
+                        break  # Exit the loop, let controller handle restart when live
+                    else:
+                        logger.info("Stream is offline, waiting...")
+                        await asyncio.sleep(30)
+                        continue
                 
                 # Record viewer count
                 viewer_count = stream_data['viewer_count']
@@ -503,10 +568,13 @@ class TwitchClipBot:
                     logger.info(f"🚨 Spike detected! {reason}")
                     self.create_clip(reason)
                 
-                # Log current stats
+                # Log current stats with clean formatting
                 chat_mps = self.calculate_chat_mps(10)
                 viewer_change, _ = self.calculate_viewer_change()
-                logger.info(f"📊 Viewers: {viewer_count}, Chat: {chat_mps:.1f} MPS, Change: {viewer_change:+.1f}%")
+                
+                # Only log the essential heartbeat info, cleanly formatted
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                logger.info(f"🔴 [{timestamp}] {self.current_streamer['name'].upper()} | Viewers: {viewer_count:,} | Chat: {chat_mps:.1f}/s | Change: {viewer_change:+.1f}%")
                 
                 await asyncio.sleep(10)  # Check every 10 seconds
                 
