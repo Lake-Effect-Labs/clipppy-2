@@ -208,24 +208,52 @@ class AlwaysOnController:
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
             
-            # Create PowerShell command to open new window with the listener
             working_dir = os.getcwd()
             window_title = f"Clipppy - {streamer_name.upper()}"
-            ps_cmd = f"Set-Location '{working_dir}'; python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode"
             
-            # Use Start-Process to create a new visible PowerShell window with custom title
-            cmd = [
-                'powershell', '-Command',
-                f'Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd \'{working_dir}\'; $Host.UI.RawUI.WindowTitle = \'{window_title}\'; python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode"'
-            ]
+            # Try to use existing PowerShell script file first (more reliable)
+            script_path = Path('scripts') / f'listener_{streamer_name}.ps1'
+            if script_path.exists():
+                script_abs_path = script_path.resolve()
+                # Use direct PowerShell execution with CREATE_NEW_CONSOLE flag
+                # This creates a visible new window
+                cmd = [
+                    'powershell.exe',
+                    '-NoExit',
+                    '-ExecutionPolicy', 'Bypass',
+                    '-File', str(script_abs_path)
+                ]
+            else:
+                # Fallback: Create a temporary script
+                import tempfile
+                temp_script = tempfile.NamedTemporaryFile(mode='w', suffix='.ps1', delete=False, encoding='utf-8')
+                temp_script.write(f"""# Temporary listener script for {streamer_name}
+Set-ExecutionPolicy Bypass -Scope Process -Force
+$ErrorActionPreference = 'Stop'
+$Host.UI.RawUI.WindowTitle = '{window_title}'
+Set-Location '{working_dir}'
+python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode
+""")
+                temp_script.close()
+                
+                cmd = [
+                    'powershell.exe',
+                    '-NoExit',
+                    '-ExecutionPolicy', 'Bypass',
+                    '-File', temp_script.name
+                ]
+            
+            # Spawn the process with CREATE_NEW_CONSOLE to get a visible window
+            # Don't capture stdout/stderr so output goes to the new window
+            if hasattr(subprocess, 'CREATE_NEW_CONSOLE'):
+                creation_flags = subprocess.CREATE_NEW_CONSOLE
+            else:
+                creation_flags = 0
             
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=os.getcwd(),
-                creationflags=subprocess.CREATE_NEW_CONSOLE if hasattr(subprocess, 'CREATE_NEW_CONSOLE') else 0
+                cwd=working_dir,
+                creationflags=creation_flags
             )
             
             # Give it a moment to start
@@ -237,6 +265,8 @@ class AlwaysOnController:
             
         except Exception as e:
             logger.error(f"❌ Failed to spawn listener for {streamer_name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def kill_listener(self, streamer_name: str):
         """Kill the listener process for a streamer and close PowerShell windows"""

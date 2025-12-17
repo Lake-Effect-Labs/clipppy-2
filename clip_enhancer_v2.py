@@ -30,6 +30,14 @@ from dataclasses import dataclass
 import tempfile
 import yaml
 
+# Video download
+try:
+    import yt_dlp
+    YT_DLP_AVAILABLE = True
+except ImportError:
+    YT_DLP_AVAILABLE = False
+    yt_dlp = None
+
 # Video processing
 try:
     # Fix PIL compatibility issue with newer versions
@@ -143,6 +151,143 @@ class ClipEnhancerV2:
         self.emotion_detector = StreamerEmotionDetector()
         
         logger.info("🎨 ClipEnhancerV2 initialized")
+    
+    def download_clip(self, clip_url: str, max_retries: int = 5, retry_delay: int = 10) -> Optional[str]:
+        """Download a Twitch clip using yt-dlp with retry logic
+        
+        Twitch clips can take 10-30 seconds to be fully processed after creation.
+        Uses exponential backoff to handle processing delays.
+        """
+        if not YT_DLP_AVAILABLE:
+            logger.error("❌ yt-dlp not available. Install with: pip install yt-dlp")
+            return None
+        
+        # Extract clip slug from URL
+        # URLs can be: https://www.twitch.tv/streamer/clip/Slug or https://clips.twitch.tv/Slug
+        # Slug format: Title-randomID (e.g., ClumsyPoorBisonGrammarKing-l-65jwLXr_7zxvs-)
+        clip_slug = None
+        if '/clip/' in clip_url:
+            # Get everything after /clip/, remove query params, strip trailing dashes
+            full_slug = clip_url.split('/clip/')[-1].split('?')[0].rstrip('-')
+            # Use the full slug (not just the last part after -)
+            clip_slug = full_slug if full_slug else None
+        elif 'clips.twitch.tv' in clip_url:
+            clip_slug = clip_url.split('/')[-1].split('?')[0].rstrip('-')
+        
+        if not clip_slug:
+            logger.error(f"❌ Could not extract clip slug from URL: {clip_url}")
+            return None
+        
+        # Ensure temp directory exists before download
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Setup download path (use absolute path)
+        output_path = (self.temp_dir / f"{clip_slug}.mp4").resolve()
+        
+        # Configure yt-dlp options
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': str(output_path),
+            'quiet': False,
+            'no_warnings': False,
+            'ignoreerrors': False,
+        }
+        
+        # Retry logic - clips may take time to be processed by Twitch
+        # Use exponential backoff: 10s, 15s, 20s, 30s, 45s
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    # Exponential backoff: base delay * (1.5 ^ attempt)
+                    delay = int(retry_delay * (1.5 ** (attempt - 1)))
+                    logger.info(f"⏳ Retry {attempt}/{max_retries-1} - waiting {delay}s for clip to be processed by Twitch...")
+                    time.sleep(delay)
+                
+                logger.info(f"📥 Downloading clip (attempt {attempt + 1}/{max_retries}): {clip_url}")
+                
+                # First try to extract info to check if clip is ready
+                # This helps catch "formats empty" errors before attempting download
+                try:
+                    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                        info = ydl.extract_info(clip_url, download=False)
+                        if not info or 'formats' not in info or not info.get('formats'):
+                            raise IndexError("Clip not ready: formats list is empty")
+                except (IndexError, KeyError) as extract_error:
+                    if "formats" in str(extract_error) or "list index out of range" in str(extract_error):
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️ Clip not ready yet (formats empty) - will retry...")
+                            continue
+                        else:
+                            logger.error(f"❌ Clip still not ready after {max_retries} attempts - Twitch may still be processing")
+                            return None
+                    else:
+                        # Other extraction errors, try download anyway
+                        pass
+                
+                # If we get here, clip appears ready - attempt download
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([clip_url])
+                
+                # Wait a moment for file to be fully written
+                time.sleep(0.5)
+                
+                # Verify file exists and is readable
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    # Try to verify it's a valid video file
+                    try:
+                        import subprocess
+                        probe_cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', str(output_path)]
+                        result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=5)
+                        if result.returncode == 0 and result.stdout.strip():
+                            logger.info(f"✅ Downloaded to: {output_path} (verified)")
+                            return str(output_path)
+                        else:
+                            logger.warning(f"⚠️ Downloaded file exists but may be corrupted, retrying...")
+                            if output_path.exists():
+                                output_path.unlink()  # Delete corrupted file
+                            raise Exception("File verification failed")
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"⚠️ File verification timed out, assuming valid")
+                        return str(output_path)
+                    except FileNotFoundError:
+                        # ffprobe not available, skip verification
+                        logger.info(f"✅ Downloaded to: {output_path} (ffprobe not available, skipping verification)")
+                        return str(output_path)
+                    except Exception as verify_error:
+                        logger.warning(f"⚠️ File verification failed: {verify_error}, retrying...")
+                        if output_path.exists():
+                            output_path.unlink()  # Delete corrupted file
+                        raise
+                else:
+                    logger.warning(f"⚠️ Download completed but file not found or empty: {output_path}")
+                    if output_path.exists():
+                        output_path.unlink()  # Remove empty file
+                    
+            except IndexError as e:
+                # Specific handling for "formats empty" error
+                error_msg = str(e)
+                if "formats" in error_msg or "list index out of range" in error_msg:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ Download attempt {attempt + 1} failed: Clip not ready (formats empty)")
+                        continue
+                    else:
+                        logger.error(f"❌ Failed to download clip after {max_retries} attempts: Clip still not ready")
+                        return None
+                else:
+                    # Other IndexError, re-raise
+                    raise
+            except Exception as e:
+                error_msg = str(e)
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ Download attempt {attempt + 1} failed: {error_msg}")
+                    continue
+                else:
+                    logger.error(f"❌ Failed to download clip after {max_retries} attempts: {error_msg}")
+                    import traceback
+                    traceback.print_exc()
+                    return None
+        
+        return None
     
     def load_config(self):
         """Load configuration from YAML file"""
@@ -259,6 +404,17 @@ class ClipEnhancerV2:
             video = mp.VideoFileClip(str(clip_path))
             original_duration = video.duration
             
+            # Trim to TikTok/Instagram Shorts optimal length (15-60 seconds) - ALWAYS enforce
+            if original_duration > 60:
+                logger.info(f"✂️ Trimming video from {original_duration:.1f}s to 60s for TikTok/Instagram Shorts")
+                video = video.subclip(0, 60)
+                original_duration = 60
+            elif original_duration < 15:
+                logger.info(f"📱 Video is {original_duration:.1f}s (already Shorts-optimized)")
+            
+            # Store original duration for later reference
+            video.original_duration = original_duration
+            
             # TikTok-first enhancements
             hook_text = None
             export_long_variant = False
@@ -330,7 +486,9 @@ class ClipEnhancerV2:
             platform_config = config.get('platform', {})
             # Pass performance mode to renderer
             platform_config['performance_mode'] = performance_mode
-            self._render_video(video, output_path, platform_config)
+            # Store original clip path for audio recovery if needed
+            original_clip_path = str(clip_path)
+            self._render_video(video, output_path, platform_config, original_clip_path=original_clip_path)
             
             # Calculate telemetry
             processing_time = (time.time() - start_time) * 1000
@@ -341,10 +499,10 @@ class ClipEnhancerV2:
             logger.info(f"📊 Words rendered: {telemetry.words_rendered}")
             logger.info(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
             
-            # TikTok variant export logic
+            # TikTok variant export logic - save to temp, will be cleaned up
             if export_long_variant:
-                logger.info("📱 Exporting 65s TikTok variant...")
-                long_output_path = output_path.parent / f"long_{output_path.name}"
+                logger.info("📱 Exporting 65s TikTok variant (temp)...")
+                long_output_path = self.temp_dir / f"long_{output_path.name}"
                 
                 # Create longer version (65s) with slower pacing
                 long_video = video.subclip(0, min(65, video.duration))
@@ -353,25 +511,19 @@ class ClipEnhancerV2:
                 # For now, just export the longer version
                 long_platform_config = platform_config.copy()
                 long_platform_config['performance_mode'] = 'fast'  # Quick render for variant
-                self._render_video(long_video, long_output_path, long_platform_config)
+                self._render_video(long_video, long_output_path, long_platform_config, original_clip_path=original_clip_path)
                 
-                logger.info(f"📱 Long variant saved: {long_output_path}")
+                logger.info(f"📱 Long variant saved to temp: {long_output_path}")
                 long_video.close()
             
-            # Always export default viral cut (25s)
-            if original_duration > 25:
-                viral_output_path = output_path.parent / f"viral_{output_path.name}"
-                viral_video = video.subclip(0, 25)
-                
-                viral_platform_config = platform_config.copy()
-                viral_platform_config['performance_mode'] = 'fast'
-                self._render_video(viral_video, viral_output_path, viral_platform_config)
-                
-                logger.info(f"🎯 Viral cut (25s) saved: {viral_output_path}")
-                viral_video.close()
+            # Note: Main output is already TikTok/Instagram Shorts optimized (15-60s)
+            # No need to create separate viral version - main output is the final clip
             
             # Cleanup
             video.close()
+            
+            # Clean up any temp files that ended up in the streamer folder
+            self._cleanup_streamer_folder(output_path.parent)
             
             return str(output_path), telemetry
             
@@ -423,10 +575,13 @@ class ClipEnhancerV2:
             return False
     
     def _apply_format_framing(self, video, format_config: Dict, streamer_name: str = None) -> Tuple[Any, SafeZone]:
-        """Story A: Format & Framing with Viral Split-Screen Layout"""
+        """
+        SIMPLE STABLE LAYOUT - No split-screen, no smart analysis
+        
+        1. Gameplay: Resize ONCE to 1080x1920 (fills entire screen)
+        2. Facecam: Optional circular overlay at top-center (detected ONCE)
+        """
         target_w, target_h = format_config.get('target_resolution', [1080, 1920])
-        smart_crop = format_config.get('smart_crop', True)
-        split_screen = format_config.get('split_screen', True)  # NEW: Viral split-screen feature
         safe_zones_config = format_config.get('safe_zones', {})
         
         # Create safe zone
@@ -437,56 +592,154 @@ class ClipEnhancerV2:
         )
         
         original_w, original_h = video.size
-        target_aspect = target_w / target_h
-        original_aspect = original_w / original_h
+        original_duration = video.duration
         
-        # Apply viral split-screen layout for TikTok/Shorts
-        if target_w == 1080 and target_h == 1920 and split_screen:  # Vertical format with split screen
-            logger.info(f"🎮 Creating viral split-screen layout from {original_w}x{original_h}")
+        # ================================================================
+        # STEP 1: GAMEPLAY - Simple resize to fill entire vertical frame
+        # ================================================================
+        if target_w == 1080 and target_h == 1920:
+            logger.info(f"📐 SIMPLE LAYOUT: Resizing {original_w}x{original_h} to {target_w}x{target_h}")
             
-            # Detect face and gameplay areas
-            face_region, gameplay_region = self._detect_face_and_gameplay(video, streamer_name)
+            # Calculate crop to maintain aspect ratio and fill frame
+            # We want to crop the source to match 9:16 aspect ratio, then resize
+            target_aspect = target_w / target_h  # 0.5625 for 9:16
+            original_aspect = original_w / original_h
             
-            if face_region and gameplay_region:
-                # Create split-screen: gameplay top (60%), face bottom (40%) - balanced layout
-                gameplay_height = int(target_h * 0.6)  # Top 60% for gameplay
-                face_height = target_h - gameplay_height  # Bottom 40% for face
-                
-                # Extract and resize gameplay area (top half)
-                gameplay_clip = video.crop(
-                    x1=gameplay_region[0], 
-                    y1=gameplay_region[1],
-                    x2=gameplay_region[2], 
-                    y2=gameplay_region[3]
-                ).resize((target_w, gameplay_height))
-                
-                # Extract and resize face area (bottom half)
-                face_clip = video.crop(
-                    x1=face_region[0], 
-                    y1=face_region[1],
-                    x2=face_region[2], 
-                    y2=face_region[3]
-                ).resize((target_w, face_height))
-                
-                # Skip split-screen to avoid CompositeVideoClip freeze
-                logger.info(f"⚠️ Skipping split-screen to avoid CompositeVideoClip freeze issue")
-                # TODO: Implement split-screen using concatenate or other non-composite methods
-                # For now, just resize the video
-                video = video.resize(newsize=(target_w, target_h))
-                
-                logger.info(f"🎮 Created split-screen: gameplay {target_w}x{gameplay_height}, face {target_w}x{face_height}")
-                
-                # Adjust safe zone for split layout - captions over gameplay area
-                safe_zone.bottom = 0.15  # Less space needed since captions go over gameplay
-                
+            if original_aspect > target_aspect:
+                # Source is wider - crop sides
+                new_w = int(original_h * target_aspect)
+                x_offset = (original_w - new_w) // 2
+                gameplay_clip = video.crop(x1=x_offset, y1=0, x2=x_offset + new_w, y2=original_h)
             else:
-                # Fallback to smart crop if detection fails
-                logger.warning("⚠️ Face/gameplay detection failed, using smart crop fallback")
-                video = self._smart_crop_fallback(video, target_w, target_h)
+                # Source is taller - crop top/bottom
+                new_h = int(original_w / target_aspect)
+                y_offset = (original_h - new_h) // 2
+                gameplay_clip = video.crop(x1=0, y1=y_offset, x2=original_w, y2=y_offset + new_h)
+            
+            # Resize ONCE to target
+            gameplay_clip = gameplay_clip.resize((target_w, target_h))
+            gameplay_clip = gameplay_clip.set_duration(original_duration)
+            
+            # ================================================================
+            # STEP 2: FACECAM OVERLAY (optional) - Detect ONCE, position ONCE
+            # ================================================================
+            is_peanut_style = streamer_name and 'theburntpeanut' in streamer_name.lower()
+            face_clip = None
+            
+            if is_peanut_style:
+                # FIXED CONSTANTS - BIGGER CIRCLE
+                FACE_SIZE = int(target_w * 0.35)  # 35% of width = ~378px (bigger circle!)
+                FACE_Y = int(target_h * 0.025)    # 2.5% from top (moved down a bit)
+                FACE_X = (target_w - FACE_SIZE) // 2 - 20  # Slightly left of center
+                
+                # theburntpeanut has TWO possible facecam positions:
+                # 1. In-game: bottom-left (16-38% x, 60-90% y)
+                # 2. Lounge/menu: center-left (5-27% x, 35-65% y)
+                
+                facecam_positions = [
+                    # Position 1: In-game (bottom-left)
+                    {
+                        'name': 'in-game',
+                        'x1': int(original_w * 0.16),
+                        'y1': int(original_h * 0.60),
+                        'x2': int(original_w * 0.38),
+                        'y2': int(original_h * 0.90)
+                    },
+                    # Position 2: Lounge/menu (center-left)
+                    {
+                        'name': 'lounge',
+                        'x1': int(original_w * 0.05),
+                        'y1': int(original_h * 0.35),
+                        'x2': int(original_w * 0.27),
+                        'y2': int(original_h * 0.65)
+                    }
+                ]
+                
+                # Try each position and pick the one with the most face content
+                best_position = None
+                best_score = -1
+                
+                try:
+                    # Sample a frame to test which position has more face content
+                    test_frame = video.get_frame(video.duration * 0.5)
+                    
+                    if CV2_AVAILABLE and np is not None and cv2 is not None:
+                        for pos in facecam_positions:
+                            # Crop the test region
+                            test_crop = test_frame[pos['y1']:pos['y2'], pos['x1']:pos['x2']]
+                            
+                            # Simple heuristic: count non-dark pixels (face is usually bright)
+                            # and check variance (face has more detail than empty space)
+                            gray = cv2.cvtColor(test_crop, cv2.COLOR_RGB2GRAY)
+                            brightness = np.mean(gray)
+                            variance = np.var(gray)
+                            
+                            # Score: prefer brighter regions with more variance (detail)
+                            score = brightness * 0.5 + variance * 0.5
+                            
+                            logger.info(f"🔍 Testing {pos['name']} position: brightness={brightness:.1f}, variance={variance:.1f}, score={score:.1f}")
+                            
+                            if score > best_score:
+                                best_score = score
+                                best_position = pos
+                        
+                        if best_position:
+                            logger.info(f"✅ Selected {best_position['name']} facecam position (score: {best_score:.1f})")
+                    else:
+                        # Fallback to in-game position if OpenCV not available
+                        best_position = facecam_positions[0]
+                        logger.info("⚠️ OpenCV not available, using default in-game position")
+                    
+                    # Use the best position
+                    fc_x1, fc_y1 = best_position['x1'], best_position['y1']
+                    fc_x2, fc_y2 = best_position['x2'], best_position['y2']
+                    
+                    # Crop and resize facecam ONCE
+                    face_clip = video.crop(x1=fc_x1, y1=fc_y1, x2=fc_x2, y2=fc_y2)
+                    face_clip = face_clip.resize((FACE_SIZE, FACE_SIZE))
+                    face_clip = face_clip.set_duration(original_duration)
+                    
+                    # Create circular TRANSPARENCY mask using MoviePy's mask system
+                    # This properly makes pixels outside the circle transparent (not black)
+                    if CV2_AVAILABLE and np is not None and cv2 is not None:
+                        mask_size = FACE_SIZE
+                        center = (mask_size // 2, mask_size // 2)
+                        radius = mask_size // 2 - 1
+                        
+                        # Create alpha mask (white = visible, black = transparent)
+                        alpha_mask = np.zeros((mask_size, mask_size), dtype=np.float32)
+                        cv2.circle(alpha_mask, center, radius, 1.0, -1)
+                        
+                        # Create a mask clip from the alpha mask
+                        from moviepy.video.VideoClip import ImageClip
+                        mask_clip = ImageClip(alpha_mask, ismask=True, duration=original_duration)
+                        
+                        # Apply the mask to make outside pixels transparent
+                        face_clip = face_clip.set_mask(mask_clip)
+                    
+                    # Position ONCE
+                    face_clip = face_clip.set_position((FACE_X, FACE_Y))
+                    logger.info(f"🎭 FACECAM: {FACE_SIZE}x{FACE_SIZE} at ({FACE_X}, {FACE_Y})")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Facecam extraction failed: {e}, skipping overlay")
+                    face_clip = None
+            
+            # ================================================================
+            # STEP 3: COMPOSITE - Single operation
+            # ================================================================
+            if face_clip is not None:
+                video = mp.CompositeVideoClip(
+                    [gameplay_clip, face_clip],
+                    size=(target_w, target_h)
+                )
+                video = video.set_duration(original_duration)
+                safe_zone.bottom = 0.18  # Adjust for face overlay
+            else:
+                video = gameplay_clip
+            
+            logger.info(f"✅ STABLE LAYOUT COMPLETE: {target_w}x{target_h}")
         
-        elif target_w == 1080 and target_h == 1920:  # Vertical without split screen
-            logger.info(f"📐 Converting {original_w}x{original_h} to vertical {target_w}x{target_h}")
-            video = self._smart_crop_fallback(video, target_w, target_h)
         else:
             logger.info(f"📐 Keeping original format: {original_w}x{original_h}")
         
@@ -677,27 +930,102 @@ class ClipEnhancerV2:
             frame = video.get_frame(video.duration * 0.5)
             frame_h, frame_w = frame.shape[:2]
                 
+            # Check if this is theburntpeanut style (face at top)
+            is_peanut_style = streamer_name and 'theburntpeanut' in streamer_name.lower()
+            
             # Determine regions based on intelligent analysis
-            if recommended_layout == 'split_screen_horizontal':
-                logger.info("📱 SMART LAYOUT: Split-screen horizontal (face bottom, gameplay top)")
+            if recommended_layout == 'split_screen_horizontal' or is_peanut_style:
+                if is_peanut_style:
+                    logger.info("📱 SMART LAYOUT: Face-top layout - theburntpeanut style")
+                    gameplay_region = (0, 0, frame_w, frame_h)  # Full screen for gameplay
+                    
+                    # theburntpeanut's facecam is in BOTTOM-LEFT corner!
+                    # Based on screenshot: approximately 15-40% x, 55-95% y
+                    facecam_x1 = int(0.12 * frame_w)
+                    facecam_x2 = int(0.42 * frame_w)
+                    facecam_y1 = int(0.55 * frame_h)
+                    facecam_y2 = int(0.95 * frame_h)
+                    
+                    face_region = (facecam_x1, facecam_y1, facecam_x2, facecam_y2)
+                    logger.info(f"📍 Using FIXED bottom-left facecam region for theburntpeanut: {face_region}")
+                    return face_region, gameplay_region
+                else:
+                    logger.info("📱 SMART LAYOUT: Split-screen horizontal (face bottom, gameplay top)")
                 
                 if face_regions:
-                    # Use detected face region, but ensure it's in bottom area
-                    primary_face = face_regions[0]  # Use first detected face
-                    face_x1, face_y1, face_x2, face_y2 = primary_face
+                    # For theburntpeanut style: use fixed top-center region OR largest face in top-center
+                    # Facecam is typically in top-center (0.4-0.6 x, 0-0.3 y)
+                    frame_area = frame_w * frame_h
+                    top_center_faces = []
+                    other_faces = []
                     
-                    # Convert to pixel coordinates and expand face region
-                    face_x1 = max(0, int((face_x1 - 0.1) * frame_w))
-                    face_y1 = max(int(0.6 * frame_h), int(face_y1 * frame_h))  # Keep in bottom area
-                    face_x2 = min(frame_w, int((face_x2 + 0.1) * frame_w))
-                    face_y2 = frame_h  # Extend to bottom
+                    for face in face_regions:
+                        fx1, fy1, fx2, fy2 = face
+                        face_center_y = (fy1 + fy2) / 2  # Vertical center
+                        face_center_x = (fx1 + fx2) / 2  # Horizontal center
+                        face_area = (fx2 - fx1) * (fy2 - fy1) * frame_area
+                        face_area_ratio = face_area / frame_area
+                        
+                        # Check if face is in top-center region (where facecam usually is)
+                        is_top_center = (face_center_y < 0.3 and 0.35 < face_center_x < 0.65)
+                        is_large_enough = face_area_ratio > 0.03
+                        
+                        if is_top_center and is_large_enough:
+                            top_center_faces.append((face, face_area_ratio))
+                        else:
+                            other_faces.append((face, face_area_ratio))
                     
-                    face_region = (face_x1, face_y1, face_x2, face_y2)
+                    # Prefer top-center faces, otherwise use largest face in top region
+                    if top_center_faces:
+                        # Use largest face in top-center
+                        top_center_faces.sort(key=lambda x: x[1], reverse=True)
+                        primary_face = top_center_faces[0][0]
+                        logger.info(f"✅ Using top-center face: area={top_center_faces[0][1]:.3f}")
+                    elif other_faces:
+                        # Use largest face in top region (even if not perfectly centered)
+                        top_faces = [(f, a) for f, a in other_faces if (f[1] + f[3])/2 < 0.4]
+                        if top_faces:
+                            top_faces.sort(key=lambda x: x[1], reverse=True)
+                            primary_face = top_faces[0][0]
+                            logger.info(f"⚠️ Using top region face (not center): area={top_faces[0][1]:.3f}")
+                        else:
+                            # Last resort: largest face overall
+                            other_faces.sort(key=lambda x: x[1], reverse=True)
+                            primary_face = other_faces[0][0]
+                            logger.warning(f"⚠️ Using largest face (may not be streamer): area={other_faces[0][1]:.3f}")
+                    else:
+                        # No faces found - use default top-center region
+                        primary_face = None
+                    
+                    if primary_face:
+                        face_x1, face_y1, face_x2, face_y2 = primary_face
+                        
+                        # Convert to pixel coordinates and expand face region slightly
+                        face_x1 = max(0, int(face_x1 * frame_w - 0.05 * frame_w))
+                        face_x2 = min(frame_w, int(face_x2 * frame_w + 0.05 * frame_w))
+                        face_y1 = max(0, int(face_y1 * frame_h))
+                        face_y2 = min(int(0.3 * frame_h), int(face_y2 * frame_h + 0.05 * frame_h))
+                        
+                        face_region = (face_x1, face_y1, face_x2, face_y2)
+                        gameplay_region = (0, 0, frame_w, frame_h)  # Full screen for gameplay
+                    else:
+                        # Original: face at bottom
+                        face_y1 = max(int(0.6 * frame_h), int(face_y1 * frame_h))  # Keep in bottom area
+                        face_y2 = frame_h  # Extend to bottom
+                        face_region = (face_x1, face_y1, face_x2, face_y2)
+                        gameplay_region = (0, 0, frame_w, int(0.65 * frame_h))  # Top area for gameplay
                 else:
-                    # Default bottom-center for face if no face detected
-                    face_region = (int(0.3 * frame_w), int(0.6 * frame_h), frame_w, frame_h)
-                
-                gameplay_region = (0, 0, frame_w, int(0.65 * frame_h))  # Top area for gameplay
+                    # No faces detected - use default regions
+                    if is_peanut_style:
+                        # Default top-center for face if no face detected (theburntpeanut style)
+                        # Use fixed top-center region: 0.4-0.6 x, 0-0.25 y
+                        face_region = (int(0.4 * frame_w), 0, int(0.6 * frame_w), int(0.25 * frame_h))
+                        logger.info(f"📍 Using default top-center face region: {face_region}")
+                        gameplay_region = (0, 0, frame_w, frame_h)  # Full screen for gameplay
+                    else:
+                        # Default bottom-center for face if no face detected
+                        face_region = (int(0.3 * frame_w), int(0.6 * frame_h), frame_w, frame_h)
+                        gameplay_region = (0, 0, frame_w, int(0.65 * frame_h))  # Top area for gameplay
                     
             elif recommended_layout == 'split_screen_vertical':
                 logger.info("📱 SMART LAYOUT: Split-screen vertical (face side, gameplay other side)")
@@ -769,10 +1097,12 @@ class ClipEnhancerV2:
             elif gameplay_region:
                 logger.info(f"✅ SMART CROP: Gameplay-only {gameplay_region}")
             
-                return face_region, gameplay_region
+            return face_region, gameplay_region
                 
         except Exception as e:
             logger.error(f"❌ Face detection failed: {e}")
+            import traceback
+            traceback.print_exc()
             return None, None
     
     def _smart_crop_fallback(self, video, target_w: int, target_h: int):
@@ -850,118 +1180,263 @@ class ClipEnhancerV2:
         elif fast_mode:
             logger.info("⚡ Fast mode enabled - skipping viral effects for speed")
         
-        # Create karaoke captions
-        if captions_config.get('karaoke_sync', True) and words:
-            caption_clips = self._create_karaoke_captions(words, captions_config.get('style', {}), video.size, safe_zone)
-            if caption_clips:
-                logger.info(f"📝 Applying {len(words)} caption words using video.fl() method")
-                video = self._apply_captions_with_fl(video, words, captions_config.get('style', {}), safe_zone, hook_text=hook_text)
+        # CAPTIONS DISABLED - clean output without text overlay
+        # if captions_config.get('karaoke_sync', True) and words:
+        #     logger.info(f"📝 Applying {len(words)} caption words using video.fl() method")
+        #     video = self._apply_captions_with_fl(video, words, captions_config.get('style', {}), safe_zone, hook_text=hook_text, streamer_name=streamer_name)
+        logger.info("📝 Captions DISABLED - clean output")
         
         telemetry['words_rendered'] = len(words)
         telemetry['emphasis_hits'] = sum(1 for word in words if word.is_emphasis)
         
         return video, telemetry
     
-    def _apply_captions_with_fl(self, video, words: List[CaptionWord], style_config: Dict, safe_zone: SafeZone, hook_text: Optional[str] = None):
-        """Apply captions using video.fl() to avoid CompositeVideoClip freezing"""
+    def _apply_captions_with_fl(self, video, words: List[CaptionWord], style_config: Dict, safe_zone: SafeZone, hook_text: Optional[str] = None, streamer_name: str = None):
+        """
+        PHRASE-BASED CAPTIONS - Not word-level karaoke
+        
+        1. Group words into natural phrases (3-9 words)
+        2. Score phrases for importance
+        3. Keep only top ~10-16 phrases for a 30s clip
+        4. Render as complete phrases, no animation
+        """
         try:
             import cv2
             import numpy as np
             
-            # MEGA VIRAL TikTok caption styling
-            font_size = style_config.get('font_size', 56)  # EVEN BIGGER font for TikTok
-            font_color = tuple(style_config.get('font_color', [255, 255, 0]))  # BRIGHT YELLOW
-            stroke_color = tuple(style_config.get('stroke_color', [0, 0, 0]))  # Black outline
-            stroke_width = style_config.get('stroke_width', 5)  # THICKER outline for readability
-            emphasis_color = (0, 255, 255)  # Cyan for emphasis words
+            # Style settings
+            is_peanut_style = (streamer_name and 'theburntpeanut' in streamer_name.lower())
+            
+            if is_peanut_style:
+                font_size = 90
+                font_color = (255, 165, 0)  # Orange
+                stroke_color = (0, 0, 0)
+                stroke_width = 8
+            else:
+                font_size = style_config.get('font_size', 80)
+                font_color = tuple(style_config.get('font_color', [255, 255, 0]))
+                stroke_color = tuple(style_config.get('stroke_color', [0, 0, 0]))
+                stroke_width = style_config.get('stroke_width', 6)
+            
+            # ================================================================
+            # STEP 1: PHRASE SEGMENTATION
+            # Group words into natural phrases based on pauses and punctuation
+            # ================================================================
+            phrases = []
+            if not words:
+                logger.info("📝 No words to caption")
+                return video
+            
+            sorted_words = sorted(words, key=lambda w: w.start_time)
+            
+            # Filler words to penalize
+            FILLERS = {'uh', 'um', 'like', 'you know', 'i mean', 'basically', 'actually', 'literally'}
+            
+            # Break words into phrases
+            current_phrase = []
+            phrase_start = None
+            
+            for i, word in enumerate(sorted_words):
+                text = word.text.strip()
+                if not text:
+                    continue
+                
+                if not current_phrase:
+                    current_phrase = [word]
+                    phrase_start = word.start_time
+                else:
+                    # Check for phrase break conditions
+                    gap = word.start_time - current_phrase[-1].end_time
+                    prev_text = current_phrase[-1].text.lower()
+                    
+                    # Break on: pause >= 0.7s, punctuation, conjunctions, or max length
+                    should_break = (
+                        gap >= 0.7 or
+                        len(current_phrase) >= 9 or
+                        prev_text.endswith(('.', '!', '?', ',')) or
+                        text.lower() in ('but', 'so', 'then', 'and', 'because', 'when', 'if')
+                    )
+                    
+                    if should_break and len(current_phrase) >= 3:
+                        # Finalize phrase
+                        phrase_end = current_phrase[-1].end_time
+                        phrase_text = ' '.join(w.text for w in current_phrase)
+                        phrases.append({
+                            'text': phrase_text.upper(),
+                            'start': phrase_start,
+                            'end': phrase_end,
+                            'word_count': len(current_phrase),
+                            'words': current_phrase
+                        })
+                        current_phrase = [word]
+                        phrase_start = word.start_time
+                    else:
+                        current_phrase.append(word)
+            
+            # Finalize last phrase
+            if current_phrase and len(current_phrase) >= 2:
+                phrase_end = current_phrase[-1].end_time
+                phrase_text = ' '.join(w.text for w in current_phrase)
+                phrases.append({
+                    'text': phrase_text.upper(),
+                    'start': phrase_start,
+                    'end': phrase_end,
+                    'word_count': len(current_phrase),
+                    'words': current_phrase
+                })
+            
+            # ================================================================
+            # STEP 2: PHRASE SCORING
+            # Score each phrase for importance, drop low-scoring ones
+            # ================================================================
+            video_duration = video.duration
+            target_phrases = max(8, min(16, int(video_duration / 2)))  # ~1 phrase per 2 seconds
+            
+            for phrase in phrases:
+                score = 0.0
+                text_lower = phrase['text'].lower()
+                duration = phrase['end'] - phrase['start']
+                
+                # Duration score (prefer 0.8-2.0s phrases)
+                if 0.8 <= duration <= 2.0:
+                    score += 2.0
+                elif 0.5 <= duration <= 2.5:
+                    score += 1.0
+                else:
+                    score -= 1.0
+                
+                # Word count score (prefer 4-7 words)
+                wc = phrase['word_count']
+                if 4 <= wc <= 7:
+                    score += 1.5
+                elif 3 <= wc <= 9:
+                    score += 0.5
+                
+                # Penalize fillers
+                filler_count = sum(1 for f in FILLERS if f in text_lower)
+                score -= filler_count * 1.0
+                
+                # Bonus for reaction words
+                reactions = ['wow', 'omg', 'what', 'no', 'yes', 'lets go', 'nice', 'dude', 'bro', 'insane', 'crazy']
+                if any(r in text_lower for r in reactions):
+                    score += 2.0
+                
+                # Bonus for questions
+                if '?' in phrase['text']:
+                    score += 1.0
+                
+                phrase['score'] = score
+            
+            # Sort by score and keep top phrases
+            phrases.sort(key=lambda p: p['score'], reverse=True)
+            kept_phrases = phrases[:target_phrases]
+            
+            # Re-sort by time for display
+            kept_phrases.sort(key=lambda p: p['start'])
+            
+            # ================================================================
+            # STEP 3: TIMING SMOOTHING
+            # Adjust timing to prevent flicker and overlap
+            # ================================================================
+            final_phrases = []
+            for i, phrase in enumerate(kept_phrases):
+                # Start slightly after phrase begins
+                start = phrase['start'] + 0.1
+                # End slightly after phrase ends, but not too long
+                end = phrase['end'] + 0.3
+                
+                # Ensure no overlap with next phrase
+                if i + 1 < len(kept_phrases):
+                    next_start = kept_phrases[i + 1]['start']
+                    if end > next_start - 0.1:
+                        end = next_start - 0.1
+                
+                # Minimum display time of 0.5s
+                if end - start < 0.5:
+                    end = start + 0.5
+                
+                final_phrases.append({
+                    'text': phrase['text'],
+                    'start': start,
+                    'end': end
+                })
+            
+            logger.info(f"📝 PHRASE CAPTIONS: {len(final_phrases)} phrases from {len(words)} words (target: {target_phrases})")
+            
+            # ================================================================
+            # STEP 4: RENDERING - Simple, stable, no animation
+            # ================================================================
+            # Pre-compute fixed values
+            CAPTION_Y = 0.42  # Fixed Y position (42% from top)
             
             def caption_effect(get_frame, t):
                 frame = get_frame(t)
+                frame_height, frame_width = frame.shape[:2]
                 
-                # TikTok hook text at the beginning (0.6-0.8s)
-                if hook_text and 0.0 <= t <= 0.8:
-                    frame_height, frame_width = frame.shape[:2]
-                    hook_y = 80  # Top area for hook
-                    
-                    # VIRAL hook styling - bright and attention-grabbing
-                    cv2.putText(frame, hook_text.upper(), 
-                               (30, hook_y), cv2.FONT_HERSHEY_SIMPLEX, 
-                               1.2, (0, 255, 255), 4, cv2.LINE_AA)  # Cyan, thick
-                    # Add shadow for better readability
-                    cv2.putText(frame, hook_text.upper(), 
-                               (32, hook_y + 2), cv2.FONT_HERSHEY_SIMPLEX, 
-                               1.2, (0, 0, 0), 6, cv2.LINE_AA)  # Black shadow
+                # Find active phrase (only one at a time)
+                active_phrase = None
+                for phrase in final_phrases:
+                    if phrase['start'] <= t <= phrase['end']:
+                        active_phrase = phrase
+                        break
                 
-                # Find active words at current time
-                active_words = [word for word in words if word.start_time <= t <= word.end_time]
+                # No phrase = no caption
+                if not active_phrase:
+                    return frame
                 
-                if active_words:
-                    frame_height, frame_width = frame.shape[:2]
+                text = active_phrase['text']
+                font_scale = font_size / 30
+                
+                # Split into max 2 lines if needed
+                max_width = int(frame_width * 0.9)
+                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, font_scale, stroke_width)[0]
+                
+                if text_size[0] > max_width:
+                    words_list = text.split()
+                    mid = len(words_list) // 2
+                    lines = [' '.join(words_list[:mid]), ' '.join(words_list[mid:])]
+                else:
+                    lines = [text]
+                
+                # Fixed Y position
+                line_height = int(font_size * 1.4)
+                total_height = len(lines) * line_height
+                base_y = int(frame_height * CAPTION_Y)
+                start_y = base_y - (total_height // 2)
+                
+                # Render each line
+                for i, line in enumerate(lines[:2]):
+                    if not line.strip():
+                        continue
                     
-                    # Create VIRAL TikTok-style text
-                    text_lines = []
-                    current_line = ""
+                    line_y = start_y + (i * line_height) + line_height
                     
-                    for word in active_words:
-                        # Convert to ALL CAPS for viral TikTok style
-                        viral_word = word.text.upper()
-                        
-                        # Add space between words but keep lines shorter for better readability
-                        if len(current_line) + len(viral_word) + 1 < 25:  # Shorter lines for TikTok
-                            current_line += (" " if current_line else "") + viral_word
-                        else:
-                            if current_line:
-                                text_lines.append(current_line)
-                            current_line = viral_word
+                    # Measure for centering
+                    line_size = cv2.getTextSize(line, cv2.FONT_HERSHEY_DUPLEX, font_scale, stroke_width)[0]
+                    x_pos = (frame_width - line_size[0]) // 2
                     
-                    if current_line:
-                        text_lines.append(current_line)
+                    # Shadow
+                    cv2.putText(frame, line, (x_pos + 3, line_y + 3),
+                              cv2.FONT_HERSHEY_DUPLEX, font_scale, (20, 20, 20), stroke_width + 3, cv2.LINE_AA)
                     
-                    # Render VIRAL text on frame
-                    if text_lines:
-                        # Calculate position in safe zone (bottom area)
-                        y_start = int(frame_height * (1 - safe_zone.bottom)) + 30
-                        
-                        for i, line in enumerate(text_lines):
-                            y_pos = y_start + (i * (font_size + 15))
-                            
-                            # Check if line contains emphasis words (text is already ALL CAPS)
-                            is_emphasis = any(word in line for word in ['INSANE', 'CRAZY', 'WTF', 'THEBURNTPEANUT', 'NO WAY', 'CLUTCH', 'POGGERS', 'SHEESH', 'LETS GO', 'OH MY GOD', 'WHAT THE'])
-                            
-                            # Use different colors and sizing for emphasis 
-                            current_font_color = emphasis_color if is_emphasis else font_color
-                            current_font_size = (font_size + 12) if is_emphasis else font_size  # MUCH bigger for emphasis
-                            
-                            # Center text horizontally
-                            text_size = cv2.getTextSize(line, cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, stroke_width)[0]
-                            x_pos = (frame_width - text_size[0]) // 2
-                            
-                            # Add shadow effect for depth
-                            shadow_offset = 3
-                            cv2.putText(frame, line, (x_pos + shadow_offset, y_pos + shadow_offset), 
-                                      cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, (50, 50, 50), stroke_width + 1)
-                            
-                            # Draw thick black outline
-                            cv2.putText(frame, line, (x_pos, y_pos), 
-                                      cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, stroke_color, stroke_width + 3)
-                            
-                            # Draw main text
-                            cv2.putText(frame, line, (x_pos, y_pos), 
-                                      cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, current_font_color, stroke_width)
-                            
-                            # Add extra glow for emphasis words
-                            if is_emphasis:
-                                # Glowing effect
-                                cv2.putText(frame, line, (x_pos, y_pos), 
-                                          cv2.FONT_HERSHEY_DUPLEX, current_font_size/30, (255, 255, 255), 1)
+                    # Outline
+                    cv2.putText(frame, line, (x_pos, line_y),
+                              cv2.FONT_HERSHEY_DUPLEX, font_scale, stroke_color, stroke_width + 2, cv2.LINE_AA)
+                    
+                    # Text
+                    cv2.putText(frame, line, (x_pos, line_y),
+                              cv2.FONT_HERSHEY_DUPLEX, font_scale, font_color, max(1, stroke_width - 3), cv2.LINE_AA)
                 
                 return frame
             
-            logger.info("✅ Applied captions using video.fl() method")
-            return video.fl(caption_effect)
+            logger.info("✅ Applied PHRASE-BASED captions")
+            enhanced_video = video.fl(caption_effect)
+            return enhanced_video
             
         except Exception as e:
-            logger.warning(f"⚠️ Caption FL effect failed: {e}")
+            logger.warning(f"⚠️ Caption effect failed: {e}")
+            import traceback
+            traceback.print_exc()
             return video
     
     def _apply_viral_effects(self, video, words: List[CaptionWord], viral_config: Dict):
@@ -997,7 +1472,7 @@ class ClipEnhancerV2:
                     # Different effects based on volume intensity
                     if volume_level > 0.9:
                         # EXTREMELY LOUD - Light shake + subtle zoom (reduced intensity)
-                        intensity = min(volume_level * 0.04, 0.05)  # Much reduced shake intensity
+                        intensity = min(volume_level * 0.015, 0.02)  # Much reduced shake intensity
                         zoom_factor = 1.0 + (volume_level * 0.1)  # Much reduced zoom
                         
                         video = self._add_screen_shake_fl(video, peak_time, peak_duration, intensity=intensity)
@@ -1006,7 +1481,7 @@ class ClipEnhancerV2:
                         
                     elif volume_level > 0.8:
                         # VERY LOUD - Just subtle shake (no zoom, no flash)
-                        intensity = volume_level * 0.03
+                        intensity = min(volume_level * 0.01, 0.015)  # Very subtle shake
                         
                         video = self._add_screen_shake_fl(video, peak_time, peak_duration, intensity=intensity)
                         effects_applied.append(f"SHAKE@{peak_time:.1f}s(vol:{volume_level:.2f})")
@@ -1220,7 +1695,7 @@ class ClipEnhancerV2:
                 frame = get_frame(t)
                 if start_time <= t <= start_time + duration:
                     progress = (t - start_time) / duration
-                    shake_intensity = intensity * math.sin(progress * math.pi * 15)  # Fast shake
+                    shake_intensity = intensity * math.sin(progress * math.pi * 8) * 0.5  # Further reduced shake frequency and amplitude
                     
                     h, w = frame.shape[:2]
                     offset_x = int(shake_intensity * w * random.uniform(-1, 1))
@@ -1577,23 +2052,42 @@ class ClipEnhancerV2:
                 logger.info(f"🤖 Loading Whisper model: {model_name}")
                 self.whisper_model = whisper.load_model(model_name)
             
-            result = self.whisper_model.transcribe(str(clip_path))
+            result = self.whisper_model.transcribe(str(clip_path), word_timestamps=True)
             
-            # Convert to word-level timing (simplified)
+            # Use word-level timestamps if available (more accurate)
             words = []
-            for segment in result['segments']:
-                segment_words = segment['text'].split()
-                segment_duration = segment['end'] - segment['start']
-                word_duration = segment_duration / len(segment_words) if segment_words else 0
-                
-                for i, word in enumerate(segment_words):
-                    words.append({
-                        'text': word,
-                        'start': segment['start'] + (i * word_duration),
-                        'end': segment['start'] + ((i + 1) * word_duration)
-                    })
+            if 'segments' in result:
+                for segment in result['segments']:
+                    # Check if word_timestamps are available
+                    if 'words' in segment and segment['words']:
+                        # Use precise word timestamps from Whisper
+                        for word_info in segment['words']:
+                            clean_text = word_info['word'].strip('.,!?;:()[]{}"\'').strip()
+                            if clean_text:  # Only add non-empty words
+                                words.append({
+                                    'text': clean_text,
+                                    'start': word_info['start'],
+                                    'end': word_info['end']
+                                })
+                    else:
+                        # Fallback: split segment text and estimate timing
+                        segment_words = segment['text'].strip().split()
+                        if segment_words:
+                            segment_duration = segment['end'] - segment['start']
+                            word_duration = segment_duration / len(segment_words)
+                            
+                            for i, word in enumerate(segment_words):
+                                # Clean word of punctuation for better matching
+                                clean_word = word.strip('.,!?;:()[]{}"\'').strip()
+                                if clean_word:  # Only add non-empty words
+                                    words.append({
+                                        'text': clean_word,
+                                        'start': segment['start'] + (i * word_duration),
+                                        'end': segment['start'] + ((i + 1) * word_duration)
+                                    })
             
-            return words
+            logger.info(f"📝 Transcribed {len(words)} words from audio")
+            return words if words else None
             
         except Exception as e:
             logger.error(f"❌ Transcription failed: {e}")
@@ -1990,7 +2484,7 @@ class ClipEnhancerV2:
         
         return mp.CompositeVideoClip([background, end_slate])
     
-    def _render_video(self, video, output_path: Path, platform_config: Dict):
+    def _render_video(self, video, output_path: Path, platform_config: Dict, original_clip_path: Optional[str] = None):
         """Render final video with platform-native settings"""
         codec = platform_config.get('output_codec', 'libx264')
         crf = platform_config.get('output_crf', 18)
@@ -2020,29 +2514,50 @@ class ClipEnhancerV2:
         def timeout_handler(signum, frame):
             raise TimeoutError("Video rendering timed out")
         
-        def render_with_timeout():
-            # Ensure we're in the correct directory to avoid temp files in root
-            import os
-            original_cwd = os.getcwd()
-            temp_dir = output_path.parent  # Use the output directory for temp files
-            
+        # Ensure audio is properly attached and synchronized before rendering
+        render_video = video  # Use a local variable to avoid scoping issues
+        if hasattr(render_video, 'audio') and render_video.audio is not None:
             try:
-                # Change to output directory so temp files go there
-                os.chdir(temp_dir)
-                
-                video.write_videofile(
-                    output_path.name,  # Use just filename since we're in the right directory
-                    codec=codec,
-                    preset=preset,
-                    ffmpeg_params=['-crf', str(crf), '-threads', str(threads)],
-                    audio_codec='aac',
-                    verbose=True,  # Show progress bar
-                    logger='bar',  # Enable progress bar
-                    temp_audiofile=f'TEMP_MPY_wvf_snd_{output_path.stem}.mp4'  # Custom temp name
-                )
-            finally:
-                # Always restore original directory
-                os.chdir(original_cwd)
+                # Make sure audio duration matches video duration
+                if abs(render_video.audio.duration - render_video.duration) > 0.1:
+                    logger.warning(f"⚠️ Audio duration ({render_video.audio.duration:.2f}s) doesn't match video ({render_video.duration:.2f}s), fixing...")
+                    # Subclip audio to match video duration
+                    audio_fixed = render_video.audio.subclip(0, min(render_video.audio.duration, render_video.duration))
+                    # Set audio duration to match video
+                    render_video = render_video.set_audio(audio_fixed.set_duration(render_video.duration))
+                else:
+                    # Ensure audio is properly set
+                    render_video = render_video.set_audio(render_video.audio)
+            except Exception as audio_fix_error:
+                logger.warning(f"⚠️ Could not fix audio timing: {audio_fix_error}, using original audio")
+        else:
+            logger.warning("⚠️ No audio found on video")
+        
+        def render_with_timeout():
+            # Ensure we're using absolute paths to avoid directory issues
+            import os
+            # Use temp directory, not output directory, to avoid nested folders
+            temp_dir = self.temp_dir.resolve()
+            
+            # Ensure temp directory exists and use absolute paths
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            output_path_abs = output_path.resolve()
+            output_path_abs.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Set temp_audiofile to be in temp_dir using absolute path
+            temp_audiofile_abs = str(temp_dir / f'TEMP_MPY_wvf_snd_{output_path_abs.stem}.mp4')
+            
+            # Don't change directories - use absolute paths everywhere
+            render_video.write_videofile(
+                str(output_path_abs),  # Use absolute path
+                codec=codec,
+                preset=preset,
+                ffmpeg_params=['-crf', str(crf), '-threads', str(threads)],
+                audio_codec='aac' if (hasattr(render_video, 'audio') and render_video.audio is not None) else None,
+                verbose=True,  # Show progress bar
+                logger='bar',  # Enable progress bar
+                temp_audiofile=temp_audiofile_abs  # Use absolute path for temp audio
+            )
         
         try:
             # Set a 10-minute timeout for rendering (Windows-compatible)
@@ -2061,41 +2576,184 @@ class ClipEnhancerV2:
             
             render_with_timeout()
                 
-        except (TimeoutError, KeyboardInterrupt) as e:
-            logger.error(f"❌ Rendering interrupted: {e}")
-            if hasattr(signal, 'alarm'):
-                signal.alarm(0)
-            # Try simpler rendering without complex composites
-            logger.info("🔄 Attempting fallback rendering...")
-            try:
-                # Use only the base video without overlays
-                base_video = video
-                if hasattr(video, 'clips') and len(video.clips) > 0:
-                    base_video = video.clips[0]  # Get the first/main clip
-                # Use same directory approach for fallback
-                import os
-                original_cwd = os.getcwd()
-                temp_dir = output_path.parent
-                
+        except (TimeoutError, KeyboardInterrupt, IndexError, Exception) as e:
+            error_msg = str(e)
+            logger.warning(f"⚠️ Rendering failed: {error_msg}")
+            
+            # Check if it's an audio-related error
+            is_audio_error = 'audio' in error_msg.lower() or 'index' in error_msg.lower() or 'buffer' in error_msg.lower()
+            
+            if is_audio_error and original_clip_path:
+                logger.info("🔄 Audio error detected - using ffmpeg for complete render...")
                 try:
-                    os.chdir(temp_dir)
-                    base_video.write_videofile(
-                        output_path.name,
-                        codec='libx264',
-                        preset='veryfast',
-                        ffmpeg_params=['-crf', '23'],
-                        audio_codec='aac',
-                        threads=2,
-                        verbose=False,
-                        logger=None,
-                        temp_audiofile=f'TEMP_MPY_fallback_{output_path.stem}.mp4'
-                    )
-                finally:
-                    os.chdir(original_cwd)
-                logger.info("✅ Fallback rendering succeeded")
-            except Exception as fallback_error:
-                logger.error(f"❌ Fallback rendering also failed: {fallback_error}")
-                raise
+                    import subprocess
+                    import os
+                    temp_dir = self.temp_dir.resolve()  # Use absolute path
+                    # Ensure temp directory exists
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    # Use simple filenames without duplicate "enhanced"
+                    clean_stem = output_path.stem.replace('enhanced_', '').replace('viral_', '')
+                    temp_video_no_audio = temp_dir / f"temp_video_no_audio_{clean_stem}.mp4"
+                    temp_audio = temp_dir / f"temp_audio_{clean_stem}.wav"
+                    # Use absolute paths for all files
+                    temp_video_no_audio = temp_video_no_audio.resolve()
+                    temp_audio = temp_audio.resolve()
+                    original_clip_path_abs = Path(original_clip_path).resolve()
+                    
+                    # Step 1: Extract video without audio using ffmpeg
+                    logger.info("🔄 Extracting video without audio...")
+                    ffmpeg_video_cmd = [
+                        'ffmpeg', '-i', str(original_clip_path_abs),
+                        '-an', '-vcodec', 'copy',  # No audio, copy video codec
+                        '-y', str(temp_video_no_audio)
+                    ]
+                    result = subprocess.run(ffmpeg_video_cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.error(f"❌ FFmpeg video extraction failed: {result.stderr}")
+                        raise Exception(f"FFmpeg video extraction failed: {result.stderr}")
+                    
+                    # Step 2: Extract audio using ffmpeg
+                    logger.info("🔄 Extracting audio with ffmpeg...")
+                    ffmpeg_audio_cmd = [
+                        'ffmpeg', '-i', str(original_clip_path_abs),
+                        '-vn', '-acodec', 'pcm_s16le', '-ar', '44100', '-ac', '2',
+                        '-y', str(temp_audio)
+                    ]
+                    result = subprocess.run(ffmpeg_audio_cmd, capture_output=True, text=True)
+                    if result.returncode != 0:
+                        logger.error(f"❌ FFmpeg audio extraction failed: {result.stderr}")
+                        raise Exception(f"FFmpeg audio extraction failed: {result.stderr}")
+                    
+                    if temp_video_no_audio.exists() and temp_audio.exists() and temp_audio.stat().st_size > 0:
+                        # Step 3: Render enhanced video WITHOUT audio first (avoids corrupted buffer)
+                        logger.info("🔄 Rendering enhanced video without audio...")
+                        video_no_audio_clip = render_video.without_audio() if hasattr(render_video, 'without_audio') else render_video
+                        
+                        # Use a simple temp filename without duplicate "enhanced"
+                        # Clean the stem more aggressively to avoid any "enhanced" in the name
+                        clean_stem_for_video = output_path.stem.replace('enhanced_', '').replace('viral_', '').replace('theburntpeanut_', '')
+                        temp_filename = f"temp_video_{clean_stem_for_video}.mp4"
+                        temp_enhanced_video = (self.temp_dir / temp_filename).resolve()
+                        # Ensure temp directory exists (use absolute path)
+                        self.temp_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        logger.info(f"🔄 Writing enhanced video (no audio) to: {temp_enhanced_video}")
+                        # Don't change directories - use absolute paths
+                        video_no_audio_clip.write_videofile(
+                            str(temp_enhanced_video),
+                            codec=codec,
+                            preset=preset,
+                            ffmpeg_params=['-crf', str(crf), '-threads', str(threads)],
+                            audio=False,  # No audio - this avoids the corrupted buffer
+                            verbose=False,
+                            logger=None
+                        )
+                        
+                        # Verify the file was created
+                        if not temp_enhanced_video.exists():
+                            raise FileNotFoundError(f"Failed to create temp enhanced video at {temp_enhanced_video}")
+                        logger.info(f"✅ Enhanced video (no audio) created: {temp_enhanced_video} ({temp_enhanced_video.stat().st_size / 1024 / 1024:.1f} MB)")
+                        
+                        # Step 4: Combine enhanced video with extracted audio using ffmpeg (bypasses MoviePy audio reader)
+                        logger.info("🔄 Combining video and audio with ffmpeg...")
+                        # Ensure output directory exists and use absolute paths
+                        output_path_abs = output_path.resolve()
+                        output_path_abs.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        # Verify temp files exist before combining (use absolute paths)
+                        temp_enhanced_video_abs = temp_enhanced_video.resolve()
+                        temp_audio_abs = temp_audio.resolve()
+                        
+                        if not temp_enhanced_video_abs.exists():
+                            # Try to find the file - MoviePy might have created it with a different name
+                            logger.warning(f"⚠️ Temp enhanced video not found at expected path: {temp_enhanced_video_abs}")
+                            # Check if MoviePy created it in the temp directory with a different name
+                            temp_dir_files = list(self.temp_dir.glob(f"*{clean_stem_for_video}*"))
+                            if temp_dir_files:
+                                logger.info(f"   Found potential temp file: {temp_dir_files[0]}")
+                                temp_enhanced_video_abs = temp_dir_files[0].resolve()
+                            else:
+                                raise FileNotFoundError(f"Temp enhanced video not found: {temp_enhanced_video_abs}")
+                        
+                        if not temp_audio_abs.exists() or temp_audio_abs.stat().st_size == 0:
+                            raise FileNotFoundError(f"Temp audio not found or empty: {temp_audio_abs}")
+                        
+                        logger.info(f"   Using video: {temp_enhanced_video_abs}")
+                        logger.info(f"   Using audio: {temp_audio_abs}")
+                        logger.info(f"   Output: {output_path_abs}")
+                        
+                        ffmpeg_combine_cmd = [
+                            'ffmpeg', '-i', str(temp_enhanced_video_abs),
+                            '-i', str(temp_audio_abs),
+                            '-c:v', 'copy',  # Copy video (no re-encode for speed)
+                            '-c:a', 'aac', '-b:a', '192k',  # Encode audio to AAC
+                            '-shortest',  # Match shortest stream
+                            '-y', str(output_path_abs)
+                        ]
+                        result = subprocess.run(ffmpeg_combine_cmd, capture_output=True, text=True)
+                        if result.returncode != 0:
+                            logger.error(f"❌ FFmpeg combine failed (exit {result.returncode}): {result.stderr}")
+                            logger.error(f"   Command: {' '.join(ffmpeg_combine_cmd)}")
+                            logger.error(f"   Input video: {temp_enhanced_video_abs} (exists: {temp_enhanced_video_abs.exists()})")
+                            logger.error(f"   Input audio: {temp_audio_abs} (exists: {temp_audio_abs.exists()}, size: {temp_audio_abs.stat().st_size if temp_audio_abs.exists() else 0})")
+                            logger.error(f"   Output: {output_path_abs}")
+                            raise Exception(f"FFmpeg combine failed: {result.stderr}")
+                        
+                        # Clean up temp files immediately
+                        for temp_file in [temp_video_no_audio, temp_audio, temp_enhanced_video]:
+                            if temp_file.exists():
+                                try:
+                                    temp_file.unlink()
+                                    logger.debug(f"🧹 Cleaned up temp file: {temp_file.name}")
+                                except Exception as e:
+                                    logger.warning(f"⚠️ Could not remove temp file {temp_file}: {e}")
+                        
+                        logger.info("✅ Video rendered successfully with ffmpeg workaround")
+                    else:
+                        logger.error("❌ Failed to extract video/audio with ffmpeg")
+                        raise Exception("Video/audio extraction failed")
+                except FileNotFoundError:
+                    logger.error("❌ ffmpeg not found - cannot extract audio")
+                    raise
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"❌ ffmpeg command failed: {e}")
+                    raise
+                except Exception as audio_fix_error:
+                    logger.error(f"❌ Audio extraction failed: {audio_fix_error}")
+                    import traceback
+                    traceback.print_exc()
+                    raise
+            else:
+                # Non-audio error, try simpler rendering
+                logger.info("🔄 Attempting fallback rendering...")
+                try:
+                    base_video = video
+                    if hasattr(video, 'clips') and len(video.clips) > 0:
+                        base_video = video.clips[0]
+                    
+                    import os
+                    original_cwd = os.getcwd()
+                    temp_dir = output_path.parent
+                    
+                    try:
+                        os.chdir(temp_dir)
+                        base_video.write_videofile(
+                            output_path.name,
+                            codec='libx264',
+                            preset='veryfast',
+                            ffmpeg_params=['-crf', '23'],
+                            audio_codec='aac',
+                            threads=2,
+                            verbose=False,
+                            logger=None,
+                            temp_audiofile=f'TEMP_MPY_fallback_{output_path.stem}.mp4'
+                        )
+                    finally:
+                        os.chdir(original_cwd)
+                    logger.info("✅ Fallback rendering succeeded")
+                except Exception as fallback_error:
+                    logger.error(f"❌ Fallback rendering also failed: {fallback_error}")
+                    raise
         
         logger.info(f"💾 Video rendered: {output_path}")
         
@@ -2123,9 +2781,66 @@ class ClipEnhancerV2:
                         logger.info(f"🧹 Cleaned up temp file: {temp_file}")
                     except Exception as e:
                         logger.warning(f"⚠️ Could not remove temp file {temp_file}: {e}")
+            
+            # Clean up temp directory
+            if self.temp_dir.exists():
+                for temp_file in self.temp_dir.glob('*'):
+                    if temp_file.is_file():
+                        try:
+                            # Keep only files that are actively being used (recently modified)
+                            # Delete old temp files (older than 1 hour)
+                            import time
+                            file_age = time.time() - temp_file.stat().st_mtime
+                            if file_age > 3600:  # 1 hour
+                                temp_file.unlink()
+                                logger.info(f"🧹 Cleaned up old temp file: {temp_file.name}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not remove temp file {temp_file}: {e}")
                         
         except Exception as e:
             logger.warning(f"⚠️ Cleanup failed: {e}")
+    
+    def _cleanup_streamer_folder(self, streamer_folder: Path):
+        """Clean up temporary files from streamer folder, keeping only final enhanced clips"""
+        try:
+            if not streamer_folder.exists():
+                return
+            
+            # Keep only files that match the final enhanced clip pattern
+            # Pattern: enhanced_{streamer_name}_{timestamp}.mp4
+            keep_pattern = 'enhanced_'
+            
+            files_removed = 0
+            dirs_removed = 0
+            
+            for item in streamer_folder.iterdir():
+                if item.is_file():
+                    # Keep only the final enhanced clip
+                    should_keep = item.name.startswith(keep_pattern) and item.suffix == '.mp4'
+                    
+                    if not should_keep:
+                        # Remove everything else (temp files, viral versions, etc.)
+                        try:
+                            item.unlink()
+                            files_removed += 1
+                            logger.info(f"🧹 Removed temp file from streamer folder: {item.name}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not remove temp file {item}: {e}")
+                elif item.is_dir():
+                    # Remove nested directories (like clips/temp subdirectories)
+                    try:
+                        import shutil
+                        shutil.rmtree(item)
+                        dirs_removed += 1
+                        logger.info(f"🧹 Removed nested directory from streamer folder: {item.name}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not remove nested directory {item}: {e}")
+            
+            if files_removed > 0 or dirs_removed > 0:
+                logger.info(f"🧹 Cleaned up {files_removed} temp file(s) and {dirs_removed} directory(ies) from {streamer_folder.name} folder")
+                        
+        except Exception as e:
+            logger.warning(f"⚠️ Streamer folder cleanup failed: {e}")
 
 
 def check_dependencies():

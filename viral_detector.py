@@ -118,6 +118,7 @@ class ViralDetector:
         
         # quality filters state
         self.first_time_chatters: Deque[float] = deque(maxlen=1000)  # timestamps of first messages
+        self.seen_user_ids: set = set()  # Track which users have sent messages before
         self.sub_only_mode: bool = False  # set via EventSub if you subscribe to mode changes
         self.raid_active_until: float = 0.0
         self.brb_ad_until: float = 0.0
@@ -149,6 +150,12 @@ class ViralDetector:
     def configure_for_streamer(self, streamer_name: str):
         """Configure algorithm settings for specific streamer"""
         self.current_streamer = streamer_name
+        
+        # Reset seen users when switching streamers (each streamer has different chatters)
+        self.seen_user_ids.clear()
+        # Reset baseline cache
+        self.baseline_unique_chatters = 10
+        self.baseline_unique_last_update = 0.0
         
         # Find streamer config
         streamer_config = None
@@ -206,6 +213,8 @@ class ViralDetector:
         self.last_clip_time = 0
         self.baseline_mps = 0.0
         self.baseline_fpm = 0.0
+        self.baseline_unique_chatters = 10  # Reset baseline cache
+        self.baseline_unique_last_update = 0.0
         self.chat_messages.clear()
         self.engagement_events.clear()
         self.viewer_history.clear()
@@ -282,6 +291,11 @@ class ViralDetector:
     def add_chat_message(self, username: str, user_id: str, message: str, is_first_message: bool = False):
         """Add a chat message to analysis"""
         ts = time.time()
+        
+        # Auto-detect first-time chatters if not explicitly set
+        if not is_first_message:
+            is_first_message = user_id not in self.seen_user_ids
+        
         msg = ChatMessage(
             timestamp=ts,
             user_id=user_id,
@@ -294,6 +308,7 @@ class ViralDetector:
         # Track first-time chatters for quality metrics
         if is_first_message:
             self.first_time_chatters.append(ts)
+            self.seen_user_ids.add(user_id)
     
     def add_viewer_data(self, viewer_count: int):
         """Add viewer count data point"""
@@ -350,20 +365,88 @@ class ViralDetector:
         return mps, unique_chatters
     
     def calculate_baseline_mps(self) -> float:
-        """Calculate baseline messages per second over last 10 minutes"""
+        """Calculate baseline messages per second over last 10 minutes (excluding current analysis window)"""
         current_time = time.time()
+        baseline_window = self.baseline_window_minutes * 60
+        cutoff_time = current_time - baseline_window
+        
+        # Exclude the current analysis window to get true baseline (not including current spike)
+        analysis_window_start = current_time - self.analysis_window_seconds
+        
+        # Get messages in baseline window, but exclude the current analysis window
+        baseline_messages = [
+            msg for msg in self.chat_messages 
+            if msg.timestamp > cutoff_time and msg.timestamp < analysis_window_start
+        ]
+        
+        # If we don't have enough historical data, use all messages except current window
+        if len(baseline_messages) < 5:
+            # Fallback: use all messages except current window
+            baseline_messages = [
+                msg for msg in self.chat_messages 
+                if msg.timestamp < analysis_window_start
+            ]
+            if len(baseline_messages) < 5:
+                return 1.0  # Default baseline
+        
+        # Calculate baseline MPS from the historical window (excluding current spike)
+        historical_window = max(baseline_window - self.analysis_window_seconds, 60)  # At least 1 minute
+        baseline_mps = len(baseline_messages) / historical_window
+        self.baseline_mps = baseline_mps
+        return baseline_mps
+    
+    def calculate_baseline_unique_chatters(self, window_seconds: int = 15) -> int:
+        """Calculate baseline unique chatters over baseline window (cached for stability)"""
+        current_time = time.time()
+        
+        # Update baseline only every 60 seconds to prevent fluctuation
+        if current_time - self.baseline_unique_last_update < 60:
+            return self.baseline_unique_chatters
+        
         baseline_window = self.baseline_window_minutes * 60
         cutoff_time = current_time - baseline_window
         
         # Get messages in baseline window
         baseline_messages = [msg for msg in self.chat_messages if msg.timestamp > cutoff_time]
         
-        if len(baseline_messages) < 5:  # Reduced minimum data requirement
-            return 0.5  # Lower default baseline to make scoring easier
+        if len(baseline_messages) < 30:  # Need more data for stable baseline
+            # Use current unique chatters as estimate if we have recent data
+            recent_msgs = [msg for msg in self.chat_messages if msg.timestamp > current_time - 60]
+            if recent_msgs:
+                recent_unique = len(set(msg.user_id for msg in recent_msgs))
+                # Smooth update: blend with existing baseline
+                self.baseline_unique_chatters = int((self.baseline_unique_chatters * 0.7) + (recent_unique * 0.3))
+                self.baseline_unique_chatters = max(10, min(self.baseline_unique_chatters, 50))  # Clamp between 10-50
+            self.baseline_unique_last_update = current_time
+            return self.baseline_unique_chatters
         
-        baseline_mps = len(baseline_messages) / baseline_window
-        self.baseline_mps = baseline_mps
-        return baseline_mps
+        # Calculate average unique chatters per window_seconds interval
+        num_windows = max(1, int(baseline_window / window_seconds))
+        unique_counts = []
+        
+        for i in range(num_windows):
+            window_start = cutoff_time + (i * window_seconds)
+            window_end = window_start + window_seconds
+            window_messages = [msg for msg in baseline_messages 
+                             if window_start <= msg.timestamp < window_end]
+            if window_messages:
+                unique_user_ids = set(msg.user_id for msg in window_messages)
+                unique_counts.append(len(unique_user_ids))
+        
+        if not unique_counts:
+            self.baseline_unique_last_update = current_time
+            return self.baseline_unique_chatters
+        
+        # Calculate new baseline and smooth it with existing
+        new_baseline = int(sum(unique_counts) / len(unique_counts))
+        new_baseline = max(10, min(new_baseline, 50))  # Clamp between 10-50
+        
+        # Heavy smoothing to prevent sudden jumps (80% old, 20% new)
+        self.baseline_unique_chatters = int((self.baseline_unique_chatters * 0.8) + (new_baseline * 0.2))
+        self.baseline_unique_chatters = max(10, min(self.baseline_unique_chatters, 50))
+        self.baseline_unique_last_update = current_time
+        
+        return self.baseline_unique_chatters
     
     def calculate_viewer_delta(self) -> float:
         """Calculate viewer percentage change over last 120 seconds"""
@@ -448,29 +531,40 @@ class ViralDetector:
         """Calculate TikTok-optimized viral moment score with multi-signal analysis"""
         current_mps, unique_chatters = self.calculate_messages_per_second(self.analysis_window_seconds)
 
-        # Skip baseline building - allow immediate clip detection
-        # This prevents the system from waiting when starting monitoring on an already-live stream
-        # if self.stream_start_time and (time.time() - self.stream_start_time) < 30:
-        #     return 0.0, {"reason":"building_baseline","unique_chatters":unique_chatters,"current_mps":current_mps}
+        # Require minimum baseline building period to prevent false positives
+        # Need at least 2 minutes of data AND at least 50 messages before allowing clips
+        if self.stream_start_time:
+            time_since_start = time.time() - self.stream_start_time
+            total_messages = len(self.chat_messages)
+            if time_since_start < 120 or total_messages < 50:
+                return 0.0, {"reason":"building_baseline","unique_chatters":unique_chatters,"current_mps":current_mps,"time":time_since_start,"messages":total_messages}
 
         baseline_mps = self.calculate_baseline_mps()
+        
+        # Also require baseline has enough data (at least 30 messages)
+        baseline_window = self.baseline_window_minutes * 60
+        cutoff_time = time.time() - baseline_window
+        baseline_messages = [msg for msg in self.chat_messages if msg.timestamp > cutoff_time]
+        if len(baseline_messages) < 30:
+            return 0.0, {"reason":"insufficient_baseline_data","unique_chatters":unique_chatters,"current_mps":current_mps,"baseline_messages":len(baseline_messages)}
         mps_z = self.calculate_chat_zscore(current_mps, baseline_mps)
+        logger.info(f"   🔍 Chat Velocity: current={current_mps:.2f} mps, baseline={baseline_mps:.2f} mps, z={mps_z:.2f} | Delta: {current_mps - baseline_mps:.2f} mps")
 
         viewer_delta_percent = self.calculate_viewer_delta()
         engagement_score = self.calculate_engagement_score()
         follow_z = self.calculate_follow_rate_zscore()
 
         # new TikTok-native signals
-        kw_z = self.keyword_burst_z(self.analysis_window_seconds)
+        kw_z = self.reaction_burst_z(self.analysis_window_seconds)  # Fixed: was keyword_burst_z
         sent_z = self.sentiment_swing_z(self.analysis_window_seconds)
         emote_d = self.emote_density(10)
 
-        # normalize to 0..1 where needed
-        chat_component = self.weight_chat * clamp(mps_z/2.5, 0, 1)
+        # normalize to 0..1 where needed (more generous normalization for better score contribution)
+        chat_component = self.weight_chat * clamp(mps_z/3.0, 0, 1)  # z=3.0 = 1.0 (was 10.0, too aggressive)
         viewer_component = self.weight_viewers * clamp(viewer_delta_percent/15.0, 0, 1)
         events_component = self.weight_events * clamp(engagement_score, 0, 1)
         follow_component = self.weight_follows * clamp(follow_z/3.0, 0, 1)
-        kw_component = self.weight_kw * clamp(kw_z/2.5, 0, 1)
+        kw_component = self.weight_kw * clamp(kw_z/2.0, 0, 1)  # z=2.0 = 1.0 (was 5.0, too aggressive)
         sent_component = self.weight_sent * clamp(sent_z/2.0, 0, 1)
         emote_component = self.weight_emote * clamp((emote_d - 0.05)/0.10, 0, 1)  # boost when >5% msgs include emotes
 
@@ -494,15 +588,21 @@ class ViralDetector:
             "threshold": self.score_threshold
         }
 
-        # core gate (multi-signal within synergy window)
+        # core gate: chat velocity AND reaction bursts (for funny gameplay moments)
         now = time.time()
         core_ok = 0
-        if mps_z >= self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"]["chat_velocity_z"]: core_ok += 1
-        if engagement_score >= self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"]["engagement_events"]: core_ok += 1
-        if kw_z >= self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"]["keyword_burst_z"]: core_ok += 1
-        # hype level proxy: treat big engagement burst as hype; or integrate hype_train 0..1 if you store it
-        hype_level = clamp(engagement_score, 0, 1)  # replace if you track real hype_train
-        if hype_level >= self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"]["hype_level"]: core_ok += 1
+        chat_velocity_threshold = self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"]["chat_velocity_z"]
+        reaction_threshold = self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"].get("reaction_burst_z", 0.5)
+        
+        signals = []
+        if mps_z >= chat_velocity_threshold:
+            core_ok += 1
+            signals.append("chat_velocity")
+        if kw_z >= reaction_threshold:
+            core_ok += 1
+            signals.append("reaction_burst")
+        
+        breakdown["core_gate_signal"] = "+".join(signals) if signals else "none"
         breakdown["core_ok"] = core_ok
 
         # penalties / quality gates
@@ -516,12 +616,15 @@ class ViralDetector:
         breakdown["total_after_penalty"] = total_after_penalty
 
         # ALWAYS DEBUG LOGGING
+        chat_velocity_threshold = self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"]["chat_velocity_z"]
+        reaction_threshold = self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"].get("reaction_burst_z", 0.5)
         logger.info(f"🧪 VIRAL DEBUG | Score: {total_after_penalty:.3f}/{self.score_threshold}")
         logger.info(f"   📊 Components: chat={chat_component:.3f} viewer={viewer_component:.3f} events={events_component:.3f}")
         logger.info(f"   🎯 TikTok: kw={kw_component:.3f} sent={sent_component:.3f} emote={emote_component:.3f}")
-        logger.info(f"   📈 Z-scores: chat={mps_z:.2f} kw={kw_z:.2f} sent={sent_z:.2f}")
-        logger.info(f"   🚪 Core gate: {core_ok}/4 signals | penalties={penalties:.2f}")
-        logger.info(f"   👥 Chatters: {unique_chatters} | MPS: {current_mps:.1f} | Baseline: {baseline_mps:.1f}")
+        logger.info(f"   📈 Z-scores: chat={mps_z:.2f} (need {chat_velocity_threshold:.2f}) kw={kw_z:.2f} (need {reaction_threshold:.2f}) sent={sent_z:.2f}")
+        signal_info = f"chat_z={mps_z:.2f} reaction_z={kw_z:.2f}"
+        logger.info(f"   🚪 Core gate: {core_ok}/2 signals ({breakdown['core_gate_signal']}) | {signal_info} | penalties={penalties:.2f}")
+        logger.info(f"   👥 Chatters: {unique_chatters} | MPS: {current_mps:.1f} | Baseline: {baseline_mps:.1f} | Delta: {current_mps - baseline_mps:.2f} mps")
         logger.info(f"   🎲 Gate req: {self.config['global']['viral_algorithm']['core_gate']['require_any']} | Chat msgs in last {self.analysis_window_seconds}s: {len(self._window_msgs(self.analysis_window_seconds))}")
 
         return total_after_penalty, breakdown
@@ -537,16 +640,20 @@ class ViralDetector:
             baseline_time = (now - self.stream_start_time) if self.stream_start_time else 999
             logger.info(f"🧪 VIRAL CHECK #{self._debug_check_count} | Baseline time: {baseline_time:.0f}s | Stream start: {self.stream_start_time}")
 
-        if now - self.last_clip_time < self.cooldown_seconds:
-            return False, f"Cooldown active ({self.cooldown_seconds}s)", {}
-
+        # Always calculate score for consistent debug logging, even during cooldown
         score, br = self.calculate_viral_score()
+        
+        # Check cooldown after calculating score (so debug logs still appear)
+        if now - self.last_clip_time < self.cooldown_seconds:
+            return False, f"Cooldown active ({self.cooldown_seconds}s)", br
 
         unique_chatters = br.get("unique_chatters", 0)
-        min_chatters_needed = max(self.min_unique_chatters, self.config["global"]["viral_algorithm"]["quality"]["min_unique_chatters"])
-        logger.info(f"   🔍 Quality Check: Unique chatters {unique_chatters} >= {min_chatters_needed}")
+        # Calculate dynamic baseline-based threshold (1.2x baseline = 20% increase)
+        baseline_unique = self.calculate_baseline_unique_chatters(self.analysis_window_seconds)
+        min_chatters_needed = max(int(baseline_unique * 1.2), 5)  # At least 20% above baseline, minimum 5
+        logger.info(f"   🔍 Quality Check: Unique chatters {unique_chatters} >= {min_chatters_needed} (baseline: {baseline_unique})")
         if unique_chatters < min_chatters_needed:
-            return False, f"Not enough unique chatters ({unique_chatters}/{min_chatters_needed})", br
+            return False, f"Not enough unique chatters ({unique_chatters}/{min_chatters_needed}, baseline: {baseline_unique})", br
 
         # first-time chatter freshness
         ftr = self.first_time_ratio(60)
@@ -555,19 +662,17 @@ class ViralDetector:
         if ftr < min_ftr:
             return False, f"Low first-time chatter ratio ({ftr:.3f} < {min_ftr})", br
 
-        # viewer floor
-        current_viewers = self.viewer_history[-1][1] if self.viewer_history else 0
-        min_viewers = self.config["global"]["viral_algorithm"]["quality"]["min_viewer_count"]
-        logger.info(f"   🔍 Quality Check: Viewers {current_viewers} >= {min_viewers}")
-        if self.viewer_history and current_viewers < min_viewers:
-            return False, f"Viewer count too low ({current_viewers} < {min_viewers})", br
-
-        # synergy gate
+        # synergy gate: chat velocity AND reaction bursts (for funny gameplay)
         require_any = self.config["global"]["viral_algorithm"]["core_gate"]["require_any"]
         core_ok = br.get("core_ok", 0)
-        logger.info(f"   🔍 Core Gate: {core_ok} >= {require_any} (DISABLED if require_any=0)")
+        chat_velocity_threshold = self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"]["chat_velocity_z"]
+        reaction_threshold = self.config["global"]["viral_algorithm"]["core_gate"]["thresholds"].get("reaction_burst_z", 0.5)
+        mps_z = br.get("z", {}).get("chat", 0)
+        kw_z = br.get("z", {}).get("kw", 0)
+        signal_name = br.get("core_gate_signal", "none")
+        logger.info(f"   🔍 Core Gate: {core_ok} >= {require_any} | Signal: {signal_name} (chat_z={mps_z:.2f} reaction_z={kw_z:.2f})")
         if core_ok < require_any:
-            return False, f"Synergy not met ({core_ok}/{require_any})", br
+            return False, f"No viral signal (chat_z={mps_z:.2f} reaction_z={kw_z:.2f}, need {require_any} signals)", br
 
         # novelty / min separation
         if now - self._last_trigger_ts < self.min_separation_seconds:
@@ -657,32 +762,69 @@ class ViralDetector:
         emote_msgs = sum(1 for m in msgs if EMOTE_REGEX.search(m.message))
         return emote_msgs / max(1, len(msgs))
 
-    def keyword_burst_z(self, seconds: int = 15) -> float:
+    def reaction_burst_z(self, seconds: int = 15) -> float:
+        """Detect reaction bursts without hardcoded keywords - uses ALL CAPS, exclamation marks, and emotes"""
         msgs = self._window_msgs(seconds)
-        if not msgs: return 0.0
-        # compile keyword set
-        kw_cfg = self.config.get('keywords', {})
-        kws = set(kw_cfg.get('global', []))
-        kws.update(kw_cfg.get(self.profile, []))
+        if not msgs: 
+            logger.debug(f"   🔍 Reaction: No messages in {seconds}s window")
+            return 0.0
+        
         hits = 0
+        reaction_types = {"allcaps": 0, "exclam": 0, "emote": 0}
         for m in msgs:
-            s = m.message.lower()
-            # cheap match: keyword or ALL CAPS or many !!!??
-            if any(k in s for k in kws) or ALLCAPS_REGEX.match(m.message) or s.count('!') + s.count('?') >= 3:
+            # Detect reactions: ALL CAPS, high exclamation/question marks, or emotes
+            is_allcaps = bool(ALLCAPS_REGEX.match(m.message))
+            is_exclam = m.message.count('!') + m.message.count('?') >= 3
+            is_emote = bool(EMOTE_REGEX.search(m.message))
+            
+            if is_allcaps: reaction_types["allcaps"] += 1
+            if is_exclam: reaction_types["exclam"] += 1
+            if is_emote: reaction_types["emote"] += 1
+            
+            if is_allcaps or is_exclam or is_emote:
                 hits += 1
+        
         rate = hits / max(1, len(msgs))
-        # baseline over last 10m
-        base_msgs = [m for m in self.chat_messages if m.timestamp > time.time() - self.baseline_window_minutes*60]
-        if len(base_msgs) < 30: return 0.0
+        
+        # Calculate baseline reaction rate (excluding current analysis window)
+        current_time = time.time()
+        baseline_window = self.baseline_window_minutes * 60
+        cutoff_time = current_time - baseline_window
+        analysis_window_start = current_time - seconds
+        
+        # Get baseline messages excluding current analysis window
+        base_msgs = [
+            m for m in self.chat_messages 
+            if m.timestamp > cutoff_time and m.timestamp < analysis_window_start
+        ]
+        
+        # If not enough data, use all historical messages
+        if len(base_msgs) < 30:
+            base_msgs = [m for m in self.chat_messages if m.timestamp < analysis_window_start]
+            if len(base_msgs) < 30: 
+                logger.debug(f"   🔍 Reaction: Insufficient baseline data ({len(base_msgs)}/30 msgs needed)")
+                return 0.0
+        
         base_hits = 0
-        kws_l = list(kws)
         for m in base_msgs:
-            s = m.message.lower()
-            if any(k in s for k in kws_l) or ALLCAPS_REGEX.match(m.message) or s.count('!') + s.count('?') >= 3:
+            is_reaction = (
+                ALLCAPS_REGEX.match(m.message) or
+                m.message.count('!') + m.message.count('?') >= 3 or
+                bool(EMOTE_REGEX.search(m.message))
+            )
+            if is_reaction:
                 base_hits += 1
+        
         base_rate = base_hits / max(1, len(base_msgs))
         std = max(self.std_floor, sqrt(base_rate*(1-base_rate)+1e-6))
-        return (rate - base_rate) / std
+        z_score = (rate - base_rate) / std
+        
+        logger.info(f"   🔍 Reaction: {hits}/{len(msgs)} reactions (rate={rate:.3f}) | Baseline: {base_hits}/{len(base_msgs)} (rate={base_rate:.3f}) | z={z_score:.2f} | Types: {reaction_types}")
+        return z_score
+    
+    def keyword_burst_z(self, seconds: int = 15) -> float:
+        """Legacy function - now uses reaction_burst_z for dynamic detection"""
+        return self.reaction_burst_z(seconds)
 
     def sentiment_swing_z(self, seconds: int = 15) -> float:
         msgs = self._window_msgs(seconds)

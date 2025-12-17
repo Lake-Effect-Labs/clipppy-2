@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 import threading
 import queue
@@ -20,8 +21,23 @@ import click
 import requests
 import websockets
 import yaml
-import os
 from dotenv import load_dotenv
+
+# Fix encoding for Windows console (handle emoji output)
+if sys.platform == 'win32':
+    try:
+        # Try to set UTF-8 encoding
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        else:
+            # Fallback for older Python versions
+            import codecs
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'replace')
+            sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'replace')
+    except Exception:
+        # If encoding setup fails, continue anyway
+        pass
 
 # Load environment variables for sensitive credentials
 load_dotenv()
@@ -192,25 +208,26 @@ class TwitchClipBot:
         """Process a single enhancement job (standalone mode only)"""
         try:
             if self.clip_enhancer_v2:
-                # Download clip first using v1 enhancer
-                if self.clip_enhancer:
-                    clip_path = self.clip_enhancer.download_clip(clip_url)
-                    if clip_path:
-                        logger.info(f"📥 Downloaded clip for enhancement")
-                        
-                        # Enhance with v2 system using current streamer config
-                        enhanced_path, telemetry = self.clip_enhancer_v2.enhance_clip(clip_path, self.current_streamer)
-                        
-                        logger.info(f"✨ Enhanced clip saved: {enhanced_path}")
-                        logger.info(f"📊 Processing time: {telemetry.processing_time_ms}ms")
-                        logger.info(f"📊 Words rendered: {telemetry.words_rendered}")
-                        logger.info(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
-                    else:
-                        logger.warning("Failed to download clip for enhancement")
+                # Download clip using v2 enhancer
+                clip_path = self.clip_enhancer_v2.download_clip(clip_url)
+                if clip_path:
+                    logger.info(f"📥 Downloaded clip for enhancement")
+                    
+                    # Enhance with v2 system using current streamer config
+                    enhanced_path, telemetry = self.clip_enhancer_v2.enhance_clip(clip_path, self.current_streamer)
+                    
+                    logger.info(f"✨ Enhanced clip saved: {enhanced_path}")
+                    logger.info(f"📊 Processing time: {telemetry.processing_time_ms}ms")
+                    logger.info(f"📊 Words rendered: {telemetry.words_rendered}")
+                    logger.info(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
                 else:
-                    logger.warning("v1 enhancer not available for downloading")
+                    logger.warning("Failed to download clip for enhancement")
+            else:
+                logger.warning("Enhancement v2 not available")
         except Exception as e:
             logger.error(f"Enhancement failed for {clip_url}: {e}")
+            import traceback
+            traceback.print_exc()
 
     def load_config(self):
         """Load configuration from YAML file"""
@@ -247,32 +264,32 @@ class TwitchClipBot:
     async def authenticate(self) -> bool:
         """Get OAuth access token from Twitch API"""
         try:
-            # Use user OAuth token if provided, otherwise fall back to client credentials
-            if self.oauth_token:
-                # Use provided user OAuth token
-                self.access_token = self.oauth_token
-                logger.info("Using provided OAuth token")
-            else:
-                # Fall back to client credentials (limited permissions)
-                url = "https://id.twitch.tv/oauth2/token"
-                params = {
-                    'client_id': self.client_id,
-                    'client_secret': self.client_secret,
-                    'grant_type': 'client_credentials'
-                }
-                
-                response = requests.post(url, params=params)
-                response.raise_for_status()
-                
-                data = response.json()
-                self.access_token = data['access_token']
-                logger.info("Using client credentials (limited clip permissions)")
+            # Always get client credentials for general API calls (stream data, etc.)
+            url = "https://id.twitch.tv/oauth2/token"
+            params = {
+                'client_id': self.client_id,
+                'client_secret': self.client_secret,
+                'grant_type': 'client_credentials'
+            }
             
+            response = requests.post(url, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            self.access_token = data['access_token']
+            
+            # Use client credentials for general API calls
             self.headers = {
                 'Authorization': f'Bearer {self.access_token}',
                 'Client-Id': self.client_id,
                 'Content-Type': 'application/json'
             }
+            
+            # Store OAuth token separately for clip creation (if provided)
+            if self.oauth_token:
+                logger.info("Using client credentials for API calls, OAuth token available for clip creation")
+            else:
+                logger.info("Using client credentials (limited clip permissions - need OAuth token for clip creation)")
             
             logger.info("Successfully authenticated with Twitch API")
             return True
@@ -348,28 +365,36 @@ class TwitchClipBot:
                                 logger.debug(f"Chat: {user_info}: {chat_message}")
                                 
                                 # Feed to viral detector if using advanced algorithm
-                                if self.viral_detector and self.config.get('global', {}).get('use_test_virality_alg', False):
+                                if self.viral_detector:
                                     user_id = f"user_{hash(user_info) % 1000000}"
                                     self.viral_detector.add_chat_message(
                                         username=user_info,
                                         user_id=user_id,
                                         message=chat_message
                                     )
-                        except:
-                            pass
+                        except Exception as e:
+                            logger.debug(f'Error parsing chat: {e}')
                             
         except Exception as e:
             logger.error(f"Chat monitoring error: {e}")
     
     def get_broadcaster_name(self) -> Optional[str]:
-        """Get broadcaster username from user ID"""
+        """Get broadcaster username from config or API"""
         if not self.current_streamer:
             return None
-            
+        
+        # First try to use the twitch_username from config (avoids API call)
+        twitch_username = self.current_streamer.get('twitch_username')
+        if twitch_username:
+            return twitch_username
+        
+        # Fallback to API lookup if twitch_username not in config
         try:
             broadcaster_id = self.current_streamer.get('broadcaster_id')
             url = f"https://api.twitch.tv/helix/users?id={broadcaster_id}"
-            response = requests.get(url, headers=self.headers)
+            # Use public headers if available, otherwise fall back to self.headers
+            headers = getattr(self, 'public_headers', self.headers)
+            response = requests.get(url, headers=headers)
             response.raise_for_status()
             
             data = response.json()
@@ -423,12 +448,16 @@ class TwitchClipBot:
             
             if should_clip:
                 # Log detailed breakdown for analysis
+                components = breakdown.get('components', {})
                 logger.info(f"🔥 Viral algorithm breakdown:")
                 logger.info(f"   Total score: {breakdown.get('total_score', 0):.3f}")
-                logger.info(f"   Chat component: {breakdown.get('chat_component', 0):.3f} (MPS: {breakdown.get('current_mps', 0):.1f})")
-                logger.info(f"   Viewer component: {breakdown.get('viewer_component', 0):.3f} (Delta: {breakdown.get('viewer_delta_percent', 0):.1f}%)")
-                logger.info(f"   Engagement component: {breakdown.get('engagement_component', 0):.3f}")
-                logger.info(f"   Follow component: {breakdown.get('follow_component', 0):.3f}")
+                logger.info(f"   Chat component: {components.get('chat', 0):.3f} (MPS: {breakdown.get('current_mps', 0):.1f})")
+                logger.info(f"   Viewer component: {components.get('viewer', 0):.3f} (Delta: {breakdown.get('viewer_delta_percent', 0):.1f}%)")
+                logger.info(f"   Engagement component: {components.get('events', 0):.3f}")
+                logger.info(f"   Follow component: {components.get('follow', 0):.3f}")
+                logger.info(f"   Keyword component: {components.get('keyword', 0):.3f}")
+                logger.info(f"   Sentiment component: {components.get('sentiment', 0):.3f}")
+                logger.info(f"   Emote component: {components.get('emote', 0):.3f}")
             
             return should_clip, reason
         else:
@@ -472,7 +501,42 @@ class TwitchClipBot:
                 return None
                 
             url = f"https://api.twitch.tv/helix/clips?broadcaster_id={broadcaster_id}"
-            response = requests.post(url, headers=self.headers)
+            
+            # Must use OAuth token for clip creation (client credentials don't have clips:edit permission)
+            if not self.oauth_token:
+                logger.error("❌ Cannot create clip: Missing OAuth token with clips:edit permission")
+                logger.error("   Run: python clipppy.py oauth-help --generate-url")
+                return None
+            
+            # Debug: Log token info (first 10 chars only for security)
+            token_preview = self.oauth_token[:10] + "..." if len(self.oauth_token) > 10 else self.oauth_token
+            logger.info(f"🔑 Using OAuth token: {token_preview} (length: {len(self.oauth_token)})")
+            
+            # Validate token first by checking its info
+            try:
+                validate_url = "https://id.twitch.tv/oauth2/validate"
+                validate_response = requests.get(validate_url, headers={'Authorization': f'OAuth {self.oauth_token}'})
+                if validate_response.status_code == 200:
+                    token_info = validate_response.json()
+                    logger.info(f"✅ Token validated - Scopes: {token_info.get('scopes', [])}")
+                    if 'clips:edit' not in token_info.get('scopes', []):
+                        logger.error("❌ Token missing 'clips:edit' scope!")
+                        logger.error("   Get a new token with clips:edit scope: python clipppy.py oauth-help --generate-url")
+                        return None
+                else:
+                    logger.warning(f"⚠️ Token validation failed: {validate_response.status_code}")
+                    logger.warning(f"   Response: {validate_response.text}")
+                    logger.warning("   Token may be expired or invalid. Get a new token: python clipppy.py oauth-help --generate-url")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not validate token: {e}")
+            
+            clip_headers = {
+                'Authorization': f'Bearer {self.oauth_token}',
+                'Client-Id': self.client_id,
+                'Content-Type': 'application/json'
+            }
+            logger.info(f"📤 Creating clip for broadcaster {broadcaster_id}...")
+            response = requests.post(url, headers=clip_headers)
             response.raise_for_status()
             
             data = response.json()
@@ -510,13 +574,20 @@ class TwitchClipBot:
                 return clip_url
             
         except requests.RequestException as e:
-            if e.response and e.response.status_code == 429:
-                logger.warning("Rate limited by Twitch API")
-            elif e.response and e.response.status_code == 401:
-                logger.error("❌ Unauthorized: Need user OAuth token with 'clips:edit' scope for clip creation")
-                logger.error("   Client credentials cannot create clips. You need to get a user OAuth token.")
+            # Check for specific HTTP errors
+            if hasattr(e, 'response') and e.response is not None:
+                status_code = e.response.status_code
+                if status_code == 429:
+                    logger.warning("⚠️ Rate limited by Twitch API - waiting before retry")
+                elif status_code == 401:
+                    logger.error("❌ Unauthorized: Need user OAuth token with 'clips:edit' scope for clip creation")
+                    logger.error("   Client credentials cannot create clips. You need to get a user OAuth token.")
+                    logger.error("   Run: python clipppy.py oauth-help --generate-url")
+                    logger.error("   Then add TWITCH_OAUTH_TOKEN=your_token to your .env file")
+                else:
+                    logger.error(f"❌ Failed to create clip: HTTP {status_code} - {e}")
             else:
-                logger.error(f"Failed to create clip: {e}")
+                logger.error(f"❌ Failed to create clip: {e}")
         
         return None
     
@@ -558,7 +629,7 @@ class TwitchClipBot:
                 self.viewer_history.append(viewer_count)
                 
                 # Feed viewer data to viral detector if using advanced algorithm
-                if self.viral_detector and self.config.get('global', {}).get('use_test_virality_alg', False):
+                if self.viral_detector:
                     self.viral_detector.add_viewer_data(viewer_count)
                 
                 # Check for spikes
@@ -636,7 +707,10 @@ def start(streamer, always_on_mode):
                 return
             
             if always_on_mode:
-                click.echo(f"🤖 Starting always-on listener for {streamer}")
+                try:
+                    click.echo(f"🤖 Starting always-on listener for {streamer}")
+                except UnicodeEncodeError:
+                    click.echo(f"Starting always-on listener for {streamer}")
                 bot.always_on_mode = True
             else:
                 click.echo(f"🎯 Starting standalone monitoring for {streamer}")
@@ -654,25 +728,62 @@ def start(streamer, always_on_mode):
             asyncio.run(bot.start_monitoring_all())
             
     except ValueError as e:
-        click.echo(f"❌ Configuration error: {e}")
+        try:
+            click.echo(f"❌ Configuration error: {e}")
+        except UnicodeEncodeError:
+            click.echo(f"ERROR: Configuration error: {e}")
         click.echo("Please check your config.yaml file.")
     except Exception as e:
-        click.echo(f"❌ Error: {e}")
+        try:
+            click.echo(f"❌ Error: {e}")
+        except UnicodeEncodeError:
+            click.echo(f"ERROR: {e}")
 
 
 @cli.command()
-def testclip():
-    """Create a test clip manually"""
+@click.option('--streamer', default='theburntpeanut', help='Streamer to create clip for')
+@click.option('--enhance', is_flag=True, help='Also enhance the clip after creation')
+def testclip(streamer, enhance):
+    """Create a test clip manually (force clip creation)"""
     try:
         bot = TwitchClipBot()
         
         async def test():
             if await bot.authenticate():
-                clip_url = bot.create_clip("Manual test clip")
+                # Set the streamer first
+                streamer_config = bot.get_streamer_config(streamer)
+                if not streamer_config:
+                    click.echo(f"❌ Streamer '{streamer}' not found in config")
+                    return
+                
+                bot.set_current_streamer(streamer_config)
+                click.echo(f"🎯 Testing clip creation for {streamer}...")
+                
+                # Force create clip (bypasses all checks)
+                clip_url = bot.create_clip("Manual test clip (forced)")
                 if clip_url:
-                    click.echo(f"✅ Test clip created: {clip_url}")
+                    click.echo(f"✅ Test clip created successfully: {clip_url}")
+                    
+                    if enhance:
+                        click.echo(f"\n🎬 Starting full enhancement pipeline...")
+                        # Download and enhance using v2 enhancer
+                        if bot.clip_enhancer_v2:
+                            click.echo(f"📥 Downloading clip...")
+                            clip_path = bot.clip_enhancer_v2.download_clip(clip_url)
+                            if clip_path:
+                                click.echo(f"✅ Downloaded to: {clip_path}")
+                                click.echo(f"🎨 Enhancing clip...")
+                                enhanced_path, telemetry = bot.clip_enhancer_v2.enhance_clip(clip_path, streamer_config)
+                                click.echo(f"✅ Enhanced clip saved: {enhanced_path}")
+                                click.echo(f"📊 Processing time: {telemetry.processing_time_ms}ms")
+                                click.echo(f"📊 Words rendered: {telemetry.words_rendered}")
+                                click.echo(f"📊 Emphasis hits: {telemetry.emphasis_hits}")
+                            else:
+                                click.echo("❌ Failed to download clip")
+                        else:
+                            click.echo("❌ Enhancement v2 not available")
                 else:
-                    click.echo("❌ Failed to create test clip")
+                    click.echo("❌ Failed to create test clip - check OAuth token")
             else:
                 click.echo("❌ Authentication failed")
         
@@ -680,6 +791,10 @@ def testclip():
         
     except ValueError as e:
         click.echo(f"❌ Configuration error: {e}")
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         click.echo("Please check your .env file has all required variables.")
     except Exception as e:
         click.echo(f"❌ Error: {e}")
