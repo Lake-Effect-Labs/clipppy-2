@@ -89,11 +89,8 @@ class AlwaysOnController:
         self.running = False
         self.check_interval = 1800  # 30 minutes
         
-        # Enhancement queue management
-        self.enhancement_queue = queue.Queue()
-        self.tiktok_posting_queue = queue.Queue()
-        self.enhancement_workers = []
-        self.max_concurrent_enhancements = 3
+        # Celery integration - no need for local workers anymore
+        # Enhancement is handled by Celery workers via Redis queue
         
         # Initialize streamers
         self.initialize_streamers()
@@ -315,160 +312,10 @@ python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode
         except Exception as e:
             logger.error(f"❌ Failed to kill listener for {streamer_name}: {e}")
     
-    def start_enhancement_workers(self):
-        """Start background enhancement worker threads"""
-        for i in range(self.max_concurrent_enhancements):
-            worker = threading.Thread(
-                target=self._enhancement_worker,
-                args=(i,),
-                daemon=True
-            )
-            worker.start()
-            self.enhancement_workers.append(worker)
-            logger.info(f"🎨 Started enhancement worker {i}")
+    # Enhancement workers removed - now handled by Celery workers
     
-    def _enhancement_worker(self, worker_id: int):
-        """Background enhancement worker"""
-        logger.info(f"🎨 Enhancement worker {worker_id} started")
-        
-        while self.running:
-            try:
-                # Get enhancement job from queue
-                job = self.enhancement_queue.get(timeout=5)
-                if job is None:  # Shutdown signal
-                    break
-                
-                logger.info(f"🎬 Worker {worker_id} processing: {job['clip_url']}")
-                
-                # Process enhancement (import here to avoid circular imports)
-                from clip_enhancer_v2 import ClipEnhancerV2 as ClipEnhancer
-                from clip_enhancer_v2 import ClipEnhancerV2
-                
-                enhancer_v1 = ClipEnhancer()
-                enhancer_v2 = ClipEnhancerV2()
-                
-                # Download clip
-                clip_path = enhancer_v1.download_clip(job['clip_url'])
-                if not clip_path:
-                    logger.error(f"❌ Worker {worker_id} failed to download clip")
-                    continue
-                
-                # Enhance clip
-                enhanced_path, telemetry = enhancer_v2.enhance_clip(
-                    clip_path, job['streamer_config']
-                )
-                
-                if enhanced_path:
-                    # Add to TikTok posting queue
-                    posting_job = {
-                        'video_path': enhanced_path,
-                        'streamer_name': job['streamer_name'],
-                        'streamer_handle': job['streamer_handle'],
-                        'game_name': job['game_name'],
-                        'clip_url': job['clip_url']
-                    }
-                    self.tiktok_posting_queue.put(posting_job)
-                    logger.info(f"✅ Worker {worker_id} completed enhancement: {enhanced_path}")
-                else:
-                    logger.error(f"❌ Worker {worker_id} failed enhancement")
-                
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"❌ Enhancement worker {worker_id} error: {e}")
-    
-    def start_tiktok_poster(self):
-        """Start TikTok posting worker"""
-        worker = threading.Thread(target=self._tiktok_poster, daemon=True)
-        worker.start()
-        logger.info("📱 Started TikTok posting worker")
-    
-    def start_queue_monitor(self):
-        """Start file-based queue monitor for listener communications"""
-        monitor = threading.Thread(target=self._queue_monitor, daemon=True)
-        monitor.start()
-        logger.info("📂 Started enhancement queue monitor")
-    
-    def _tiktok_poster(self):
-        """Background TikTok posting worker"""
-        logger.info("📱 TikTok posting worker started")
-        
-        while self.running:
-            try:
-                # Get posting job from queue
-                job = self.tiktok_posting_queue.get(timeout=10)
-                if job is None:  # Shutdown signal
-                    break
-                
-                # Generate caption with streamer info
-                caption = self.generate_tiktok_caption(
-                    job['streamer_name'],
-                    job['streamer_handle'], 
-                    job['game_name']
-                )
-                
-                logger.info(f"📱 Posting to TikTok: {job['streamer_name']} clip")
-                logger.info(f"📝 Caption: {caption[:50]}...")
-                
-                # TODO: Implement actual TikTok posting
-                # For now, just log the action
-                logger.info(f"✅ TikTok post queued: {job['video_path']}")
-                
-                # Save posting record
-                self.save_posting_record(job, caption)
-                
-            except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"❌ TikTok posting error: {e}")
-    
-    def _queue_monitor(self):
-        """Monitor file-based enhancement queue from listeners"""
-        import os
-        import json
-        import time
-        
-        logger.info("📂 Enhancement queue monitor started")
-        queue_dir = "data/enhancement_queue"
-        os.makedirs(queue_dir, exist_ok=True)
-        
-        while self.running:
-            try:
-                # Check for new queue files
-                queue_files = [f for f in os.listdir(queue_dir) if f.endswith('.json')]
-                
-                for queue_file in queue_files:
-                    file_path = os.path.join(queue_dir, queue_file)
-                    
-                    try:
-                        # Read and parse the queue file
-                        with open(file_path, 'r') as f:
-                            job_data = json.load(f)
-                        
-                        # Add to enhancement queue
-                        self.enhancement_queue.put(job_data)
-                        
-                        # Remove processed file
-                        os.remove(file_path)
-                        
-                        logger.info(f"📂 Queued clip from {job_data['streamer_name']}: {job_data['clip_url']}")
-                        
-                    except Exception as e:
-                        logger.error(f"❌ Failed to process queue file {queue_file}: {e}")
-                        # Move problematic file to avoid infinite loop
-                        try:
-                            os.rename(file_path, file_path + '.error')
-                        except:
-                            pass
-                
-                # Sleep before next check
-                time.sleep(2)
-                
-            except Exception as e:
-                logger.error(f"❌ Queue monitor error: {e}")
-                time.sleep(5)
-        
-        logger.info("📂 Enhancement queue monitor stopped")
+    # All enhancement and TikTok posting removed - Celery handles enhancement now
+    # Enhanced clips are saved to folders for manual TikTok posting
     
     def generate_tiktok_caption(self, streamer_name: str, streamer_handle: str, game_name: str) -> str:
         """Generate TikTok caption with streamer info and game hashtags"""
@@ -521,33 +368,7 @@ python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode
         
         return caption
     
-    def save_posting_record(self, job: Dict, caption: str):
-        """Save posting record for tracking"""
-        record = {
-            'timestamp': datetime.now().isoformat(),
-            'streamer': job['streamer_name'],
-            'game': job['game_name'],
-            'video_path': str(job['video_path']),
-            'caption': caption,
-            'clip_url': job['clip_url']
-        }
-        
-        # Append to posting log
-        log_file = Path('data/tiktok_posts.json')
-        log_file.parent.mkdir(exist_ok=True)
-        
-        posts = []
-        if log_file.exists():
-            try:
-                with open(log_file, 'r') as f:
-                    posts = json.load(f)
-            except:
-                posts = []
-        
-        posts.append(record)
-        
-        with open(log_file, 'w') as f:
-            json.dump(posts[-1000:], f, indent=2)  # Keep last 1000 posts
+    # TikTok posting removed - clips saved to folders for manual posting
     
     async def run_status_check_cycle(self):
         """Run one complete status check cycle"""
@@ -593,11 +414,9 @@ python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode
             logger.error("❌ Failed to authenticate with Twitch")
             return
         
-        # Start background workers
+        # Start monitoring (no local workers needed - Celery handles enhancement)
         self.running = True
-        self.start_enhancement_workers()
-        self.start_tiktok_poster()
-        self.start_queue_monitor()
+        logger.info("✅ Controller started - Celery workers handle enhancement")
         
         # Main monitoring loop
         try:

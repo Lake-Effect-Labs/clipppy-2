@@ -46,7 +46,6 @@ load_dotenv()
 try:
     from clip_enhancer_v2 import ClipEnhancerV2 as ClipEnhancer, check_dependencies as check_deps_v1
     from clip_enhancer_v2 import ClipEnhancerV2, check_dependencies
-    from tiktok_uploader import TikTokUploader
     from viral_detector import ViralDetector
 except ImportError as e:
     print(f"⚠️ Import error: {e}")
@@ -54,7 +53,6 @@ except ImportError as e:
     ClipEnhancerV2 = None
     check_dependencies = None
     check_deps_v1 = None
-    TikTokUploader = None
     ViralDetector = None
 
 # Suppress TensorFlow warnings for cleaner output
@@ -78,7 +76,6 @@ class TwitchClipBot:
         self.load_config()
         
         # Initialize components
-        self.tiktok_uploader = TikTokUploader(config_path) if TikTokUploader else None
         self.clip_enhancer = ClipEnhancer() if ClipEnhancer else None
         self.clip_enhancer_v2 = ClipEnhancerV2(config_path) if ClipEnhancerV2 else None
         self.viral_detector = ViralDetector(self.config) if ViralDetector else None
@@ -162,15 +159,10 @@ class TwitchClipBot:
         logger.info("🏁 Enhancement worker stopped")
     
     def _send_clip_to_controller(self, clip_url: str, reason: str):
-        """Send clip to central controller for enhancement"""
+        """Send clip to Celery/Redis queue for enhancement"""
         try:
-            import json
-            import os
             from datetime import datetime
-            
-            # Create queue directory if it doesn't exist
-            queue_dir = "data/enhancement_queue"
-            os.makedirs(queue_dir, exist_ok=True)
+            from celery_tasks import enhance_clip_task
             
             # Create clip job data
             # Get current game name from stream data
@@ -192,17 +184,15 @@ class TwitchClipBot:
                 'streamer_config': self.current_streamer
             }
             
-            # Write to queue file
-            timestamp = int(datetime.now().timestamp())
-            queue_file = os.path.join(queue_dir, f"clip_{timestamp}_{self.current_streamer.get('name', 'unknown')}.json")
+            # Send to Celery/Redis queue (async, non-blocking)
+            task = enhance_clip_task.delay(job_data)
             
-            with open(queue_file, 'w') as f:
-                json.dump(job_data, f, indent=2)
-            
-            logger.info(f"📤 Sent clip to central queue: {queue_file}")
+            logger.info(f"📤 Sent clip to Celery queue (task ID: {task.id}): {clip_url}")
+            logger.info(f"🎯 Reason: {reason}")
             
         except Exception as e:
-            logger.error(f"❌ Failed to send clip to controller: {e}")
+            logger.error(f"❌ Failed to send clip to Celery: {e}")
+            logger.warning("⚠️ Make sure Redis and Celery worker are running!")
     
     def _process_enhancement(self, clip_url: str, reason: str):
         """Process a single enhancement job (standalone mode only)"""
@@ -308,8 +298,13 @@ class TwitchClipBot:
             # Add cache-busting parameter to get fresh data
             import time
             broadcaster_id = self.current_streamer.get('broadcaster_id')
-            url = f"https://api.twitch.tv/helix/streams?user_id={broadcaster_id}&_t={int(time.time())}"
-            response = requests.get(url, headers=self.headers)
+            # Add timestamp to prevent caching and get fresh viewer count
+            url = f"https://api.twitch.tv/helix/streams?user_id={broadcaster_id}&_t={int(time.time() * 1000)}"
+            # Add cache-control headers to ensure fresh data
+            fresh_headers = self.headers.copy()
+            fresh_headers['Cache-Control'] = 'no-cache'
+            fresh_headers['Pragma'] = 'no-cache'
+            response = requests.get(url, headers=fresh_headers, timeout=10)
             response.raise_for_status()
             
             data = response.json()
@@ -824,9 +819,6 @@ def config():
         for streamer in disabled_streamers:
             click.echo(f"     🔴 {streamer['name']}")
         
-        # Show TikTok status
-        click.echo(f"\n📱 TikTok Integration: {'✅ Ready' if bot.tiktok_uploader else '❌ Not available'}")
-        
         # Show enhancement status
         click.echo(f"🎬 Clip Enhancement: {'✅ Ready' if bot.clip_enhancer else '❌ Not available'}")
         
@@ -1073,27 +1065,8 @@ def dashboard():
 @click.option('--streamer', required=True, help='Streamer name from config')
 def upload(video_path, streamer):
     """Upload a video to TikTok for a specific streamer"""
-    try:
-        bot = TwitchClipBot()
-        
-        if not bot.tiktok_uploader:
-            click.echo("❌ TikTok uploader not available")
-            return
-        
-        streamer_config = bot.get_streamer_config(streamer)
-        if not streamer_config:
-            click.echo(f"❌ Streamer '{streamer}' not found in config")
-            return
-        
-        success = bot.tiktok_uploader.upload_to_tiktok(video_path, streamer)
-        
-        if success:
-            click.echo(f"✅ Video queued for upload to @{streamer_config.get('tiktok_account', {}).get('username', f'{streamer}_clippy')}")
-        else:
-            click.echo("❌ Upload failed")
-            
-    except Exception as e:
-        click.echo(f"❌ Error: {e}")
+    click.echo("❌ TikTok auto-uploading has been removed. Enhanced clips are saved to folders for manual posting.")
+    click.echo(f"📁 Check: clips/{streamer}/enhanced/")
 
 
 @cli.command()
@@ -1169,58 +1142,8 @@ def toggle_streamer(streamer_name, enable):
 @click.option('--days', default=7, help='Number of days to show stats for')
 def stats(days):
     """Show performance statistics"""
-    try:
-        bot = TwitchClipBot()
-        
-        if bot.tiktok_uploader:
-            enabled_streamers = bot.get_enabled_streamers()
-            
-            click.echo(f"📊 Performance Stats (Last {days} days)")
-            click.echo("=" * 50)
-            
-            total_uploads = 0
-            for streamer in enabled_streamers:
-                stats = bot.tiktok_uploader.get_account_stats(streamer['name'])
-                total_uploads += stats['total_uploads']
-                
-                click.echo(f"\n🎬 {streamer['name']}")
-                click.echo(f"   Total uploads: {stats['total_uploads']}")
-                click.echo(f"   Uploads today: {stats['uploads_today']}")
-                
-                for account in stats['accounts']:
-                    click.echo(f"   Account uploads today: {account['uploads_today']}")
-            
-            click.echo(f"\n🎯 Total Network Uploads: {total_uploads}")
-            
-        else:
-            click.echo("❌ Statistics not available - TikTok uploader not initialized")
-        
-    except Exception as e:
-        click.echo(f"❌ Error: {e}")
-        if os.getenv('OPENAI_API_KEY'):
-            click.echo("   pip install openai  # Optional for AI text generation")
-    
-    # Check OpenAI API key
-    if os.getenv('OPENAI_API_KEY'):
-        click.echo("✅ OpenAI API key configured")
-    else:
-        click.echo("⚠️  No OpenAI API key found (optional)")
-        click.echo("   Add OPENAI_API_KEY=your_key to .env for AI text generation")
-    
-    # Test enhancement
-    click.echo("\n🧪 Testing enhancement capabilities...")
-    try:
-        enhancer = ClipEnhancer()
-        test_text = enhancer.generate_viral_text("test")
-        click.echo(f"✅ Text generation: {test_text}")
-        
-        click.echo("✅ Clip enhancement ready!")
-        click.echo("\n📚 Usage:")
-        click.echo("   python twitch_clip_bot.py enhance <clip_url>")
-        click.echo("   python twitch_clip_bot.py enhance <clip_url> --text 'CUSTOM TEXT' --sound airhorn")
-        
-    except Exception as e:
-        click.echo(f"❌ Enhancement test failed: {e}")
+    click.echo("❌ TikTok stats not available (auto-uploading removed)")
+    click.echo("📁 Enhanced clips are saved to: clips/[streamer]/enhanced/")
 
 
 @cli.command()

@@ -476,6 +476,62 @@ streamers:
           enabled: true
         attribution:
           enabled: true
+- name: hutch
+  twitch_username: hutchmf
+  broadcaster_id: '180118013'
+  enabled: true
+  profile: gaming
+  thresholds:
+    chat_spike: 50.0
+    viewer_increase: 35.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.15
+    min_unique_chatters: 25
+    cooldown_seconds: 600
+    baseline_window_minutes: 5
+  tiktok_account:
+    username: hutch_clippy
+    max_posts_per_day: 5
+    posting_hours:
+      start: 14
+      end: 22
+    hashtags:
+    - '#hutch'
+    - '#hutchmf'
+    - '#gaming'
+    - '#twitch'
+    - '#viral'
+    - '#fyp'
+    - '#clips'
+  enhancement:
+    preset: viral_shorts
+    performance_mode: balanced
+    overrides:
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - CLUTCH
+        - POGGERS
+        - SHEESH
+        - WTF
+        - HUTCH
+        - BRO
+        - LETS GO
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@hutch_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
 - name: theburntpeanut
   twitch_username: theburntpeanut
   broadcaster_id: '472066926'
@@ -742,16 +798,16 @@ streamers:
 - name: timthetatman
   twitch_username: timthetatman
   broadcaster_id: '36769016'
-  enabled: false
+  enabled: true
   profile: gaming
   thresholds:
-    chat_spike: 60.0
-    viewer_increase: 25.0
+    chat_spike: 40.0
+    viewer_increase: 15.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.1
-    min_unique_chatters: 25
-    cooldown_seconds: 3600
+    score_threshold: 0.08
+    min_unique_chatters: 12
+    cooldown_seconds: 1800
     baseline_window_minutes: 3
   enhancement:
     preset: viral_shorts

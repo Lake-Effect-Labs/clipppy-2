@@ -152,6 +152,89 @@ class ClipEnhancerV2:
         
         logger.info("🎨 ClipEnhancerV2 initialized")
     
+    def download_clip_via_api(self, clip_slug: str, output_path: Path) -> bool:
+        """
+        Fallback method: Download clip directly from Twitch API.
+        
+        Args:
+            clip_slug: Clip slug/ID
+            output_path: Where to save the clip
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import requests
+            
+            # Get Twitch API credentials from config
+            twitch_config = self.config.get('twitch', {})
+            client_id = twitch_config.get('client_id')
+            client_secret = twitch_config.get('client_secret')
+            
+            if not client_id or not client_secret:
+                logger.warning("⚠️ Twitch API credentials not found in config - cannot use API fallback")
+                return False
+            
+            # Get OAuth token
+            logger.info("🔑 Getting Twitch API token for direct download...")
+            auth_url = "https://id.twitch.tv/oauth2/token"
+            auth_params = {
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'grant_type': 'client_credentials'
+            }
+            auth_response = requests.post(auth_url, params=auth_params, timeout=10)
+            auth_response.raise_for_status()
+            access_token = auth_response.json()['access_token']
+            
+            # Get clip info from Twitch API
+            logger.info(f"📡 Fetching clip info from Twitch API: {clip_slug}")
+            headers = {
+                'Client-ID': client_id,
+                'Authorization': f'Bearer {access_token}'
+            }
+            
+            # Query clips endpoint
+            clips_url = f"https://api.twitch.tv/helix/clips?id={clip_slug}"
+            clips_response = requests.get(clips_url, headers=headers, timeout=10)
+            clips_response.raise_for_status()
+            
+            clips_data = clips_response.json()
+            if not clips_data.get('data'):
+                logger.error("❌ No clip data returned from Twitch API")
+                return False
+            
+            clip_info = clips_data['data'][0]
+            thumbnail_url = clip_info.get('thumbnail_url')
+            
+            if not thumbnail_url:
+                logger.error("❌ No thumbnail URL in clip data")
+                return False
+            
+            # Extract video URL from thumbnail URL
+            # Thumbnail format: https://clips-media-assets2.twitch.tv/[ID]-preview-480x272.jpg
+            # Video format: https://clips-media-assets2.twitch.tv/[ID].mp4
+            video_url = thumbnail_url.split('-preview-')[0] + '.mp4'
+            
+            logger.info(f"📥 Downloading clip from: {video_url}")
+            
+            # Download the video
+            video_response = requests.get(video_url, stream=True, timeout=30)
+            video_response.raise_for_status()
+            
+            # Save to file
+            with open(output_path, 'wb') as f:
+                for chunk in video_response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            logger.info(f"✅ Downloaded via Twitch API to: {output_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ API fallback download failed: {e}")
+            return False
+    
     def download_clip(self, clip_url: str, max_retries: int = 5, retry_delay: int = 10) -> Optional[str]:
         """Download a Twitch clip using yt-dlp with retry logic
         
@@ -213,7 +296,19 @@ class ClipEnhancerV2:
                         if not info or 'formats' not in info or not info.get('formats'):
                             raise IndexError("Clip not ready: formats list is empty")
                 except (IndexError, KeyError) as extract_error:
-                    if "formats" in str(extract_error) or "list index out of range" in str(extract_error):
+                    error_str = str(extract_error)
+                    # Check for the specific KeyError('data') issue with yt-dlp's Twitch extractor
+                    if isinstance(extract_error, KeyError) and "'data'" in error_str:
+                        logger.warning(f"⚠️ yt-dlp Twitch extractor error (KeyError('data')) - trying API fallback")
+                        # Try API fallback immediately
+                        if self.download_clip_via_api(clip_slug, output_path):
+                            if output_path.exists() and output_path.stat().st_size > 0:
+                                logger.info(f"✅ Successfully downloaded via API fallback")
+                                return str(output_path)
+                        # If API fallback failed, return None
+                        logger.error("❌ Both yt-dlp and API fallback failed")
+                        return None
+                    elif "formats" in error_str or "list index out of range" in error_str:
                         if attempt < max_retries - 1:
                             logger.warning(f"⚠️ Clip not ready yet (formats empty) - will retry...")
                             continue
@@ -278,6 +373,18 @@ class ClipEnhancerV2:
                     raise
             except Exception as e:
                 error_msg = str(e)
+                # Check if this is the KeyError('data') wrapped in a DownloadError
+                if "KeyError" in error_msg and "'data'" in error_msg:
+                    logger.warning(f"⚠️ yt-dlp Twitch extractor error detected - trying API fallback")
+                    # Try API fallback immediately
+                    if self.download_clip_via_api(clip_slug, output_path):
+                        if output_path.exists() and output_path.stat().st_size > 0:
+                            logger.info(f"✅ Successfully downloaded via API fallback")
+                            return str(output_path)
+                    # If API fallback failed, return None
+                    logger.error("❌ Both yt-dlp and API fallback failed")
+                    return None
+                
                 if attempt < max_retries - 1:
                     logger.warning(f"⚠️ Download attempt {attempt + 1} failed: {error_msg}")
                     continue
