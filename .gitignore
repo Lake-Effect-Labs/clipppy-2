@@ -7,6 +7,9 @@ config/local_config.yaml
 
 # Sensitive config files
 config/config_local.yaml
+config/youtube_credentials.json
+config/youtube_token.pickle
+data/youtube_upload_queue.json
 
 # Python
 __pycache__/
