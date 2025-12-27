@@ -1,4 +1,26 @@
 twitch: null
+youtube:
+  enabled: true
+  timezone_offset_hours: -5
+  min_hours_between_posts: 4
+  max_posts_per_day: 6
+  preferred_days:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  auto_upload_clips: true
+  auto_upload_compilations: true
+  compilation_priority: 10
+  clip_priority: 5
+  default_privacy: public
+  made_for_kids: false
+  category_id: '20'
+  use_ai_metadata: true
+  min_viral_score_for_youtube: 0.2
 tiktok:
   main_account:
     username: clipppy_main
@@ -19,7 +41,7 @@ tiktok:
 
     {hashtags}'
 global:
-  max_clips_per_day: 10  # target: ~10 clips total across all streamers
+  max_clips_per_day: 10
   monitoring_interval: 30
   cleanup_temp_files: true
   auto_enhance: true
@@ -29,42 +51,35 @@ global:
     viewer_increase: 30
     time_window: 10
   viral_algorithm:
-    score_threshold: 0.15          # lowered for funny gameplay moments (was 0.8, too high)
-    min_unique_chatters: 25       # legacy setting (now uses dynamic baseline-based threshold)
-    cooldown_seconds: 600         # 10 minutes between clips per streamer
+    score_threshold: 0.15
+    min_unique_chatters: 25
+    cooldown_seconds: 600
     analysis_window_seconds: 15
-    baseline_window_minutes: 5    # more stable baseline learning
+    baseline_window_minutes: 5
     synergy_window_seconds: 8
-    min_separation_seconds: 45    # longer separation for novelty
+    min_separation_seconds: 45
     std_floor: 0.1
-
-    # core weights used as defaults (overridable per profile)
     weights:
-      chat_velocity: 0.30
-      viewer_delta: 0.20
-      engagement_events: 0.20
+      chat_velocity: 0.3
+      viewer_delta: 0.2
+      engagement_events: 0.2
       follow_rate: 0.05
       keyword_burst: 0.15
       sentiment_swing: 0.05
       emote_density: 0.05
-
-    # core gate: chat velocity AND reaction bursts (for funny gameplay moments)
     core_gate:
-      require_any: 2                # require BOTH signals (chat velocity AND reactions)
+      require_any: 2
       thresholds:
-        chat_velocity_z: 0.0         # chat must be at least at baseline level (0.0 = baseline, positive = above baseline)
-        reaction_burst_z: 0.4        # reaction bursts (ALL CAPS, !!!, emotes) must be 0.4 z-score above baseline (lowered from 0.5)
-
+        chat_velocity_z: 0.0
+        reaction_burst_z: 0.2
     penalties:
       raid_dampen: 1.0
       brb_or_ad: 1.0
       sub_only_chat: 1.0
-
     quality:
-      min_first_time_ratio: 0.01     # require some new chatters (lowered for low-activity channels)
-      min_unique_chatters: 3         # require more engagement (lowered for low-activity channels)
-      min_viewer_count: 5            # higher viewer requirement (lowered for low-activity channels)
-
+      min_first_time_ratio: 0.01
+      min_unique_chatters: 3
+      min_viewer_count: 5
 profiles:
   gaming:
     weights:
@@ -77,7 +92,6 @@ profiles:
       follow_rate: 0.05
     thresholds:
       score_threshold: 0.8
-
   irl:
     weights:
       chat_velocity: 0.22
@@ -85,28 +99,57 @@ profiles:
       engagement_events: 0.15
       keyword_burst: 0.12
       emote_density: 0.05
-      sentiment_swing: 0.18       # big on facial/vocal emotion
-      follow_rate: 0.10
+      sentiment_swing: 0.18
+      follow_rate: 0.1
     thresholds:
-      score_threshold: 0.15       # lowered for funny gameplay moments (was 0.8)
-
+      score_threshold: 0.15
   reaction:
     weights:
       chat_velocity: 0.24
       viewer_delta: 0.16
       engagement_events: 0.16
-      keyword_burst: 0.20
+      keyword_burst: 0.2
       emote_density: 0.04
       sentiment_swing: 0.14
       follow_rate: 0.06
     thresholds:
       score_threshold: 0.8
-
 keywords:
-  global: ["clip", "no shot", "wtf", "holy", "omg", "no way", "bro", "LMAO", "pog", "poggers"]
-  gaming: ["ace","1v","clutch","flick","noscope","wallbang","pentakill","headshot","god run"]
-  irl:    ["crying","shaking","i'm done","no way","bro what","that's wild"]
-  reaction: ["pause","rewind","watch this","listen","turn this up","insane"]
+  global:
+  - clip
+  - no shot
+  - wtf
+  - holy
+  - omg
+  - no way
+  - bro
+  - LMAO
+  - pog
+  - poggers
+  gaming:
+  - ace
+  - 1v
+  - clutch
+  - flick
+  - noscope
+  - wallbang
+  - pentakill
+  - headshot
+  - god run
+  irl:
+  - crying
+  - shaking
+  - i'm done
+  - no way
+  - bro what
+  - that's wild
+  reaction:
+  - pause
+  - rewind
+  - watch this
+  - listen
+  - turn this up
+  - insane
 enhancement_presets:
   viral_shorts:
     format:
@@ -284,7 +327,7 @@ streamers:
     - '#fyp'
   enhancement:
     preset: viral_shorts
-    performance_mode: fast  # Use fast mode for quicker processing  
+    performance_mode: fast
     overrides:
       captions:
         enabled: true
@@ -303,60 +346,6 @@ streamers:
         watermark:
           enabled: true
           handle_text: '@jynxzi_clippy'
-        border:
-          enabled: true
-        vignette:
-          enabled: true
-        end_slate:
-          enabled: true
-        attribution:
-          enabled: true
-- name: nickmercs
-  twitch_username: nickmercs
-  broadcaster_id: '15564828'
-  enabled: false
-  profile: gaming
-  thresholds:
-    chat_spike: 75.0
-    viewer_increase: 20.0
-    time_window: 15
-  viral_algorithm:
-    score_threshold: 0.8
-    min_unique_chatters: 25
-    cooldown_seconds: 3600
-    baseline_window_minutes: 5
-  tiktok_account:
-    username: nickmercs_clippy
-    max_posts_per_day: 5
-    posting_hours:
-      start: 12
-      end: 23
-    hashtags:
-    - '#nickmercs'
-    - '#cod'
-    - '#warzone'
-    - '#gaming'
-    - '#viral'
-    - '#fyp'
-    - '#mfam'
-  enhancement:
-    preset: viral_shorts
-    overrides:
-      captions:
-        enabled: true
-        emphasis_map:
-        - LETS GO
-        - CLUTCH
-        - NO SHOT
-        - OH MY GOD
-        - WHAT THE
-        - SHEESH
-        - BRO
-        - MFAM
-      branding:
-        watermark:
-          enabled: true
-          handle_text: '@nickmercs_clippy'
         border:
           enabled: true
         vignette:
@@ -479,7 +468,7 @@ streamers:
 - name: hutch
   twitch_username: hutchmf
   broadcaster_id: '180118013'
-  enabled: true
+  enabled: false
   profile: gaming
   thresholds:
     chat_spike: 50.0
@@ -542,10 +531,27 @@ streamers:
     viewer_increase: 35.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.15          # lowered for funny gameplay moments (was 0.8, too high)
-    min_unique_chatters: 25       # legacy setting (now uses dynamic baseline-based threshold)
-    cooldown_seconds: 600         # 10 minutes between clips per streamer
+    score_threshold: 0.3
+    min_unique_chatters: 35
+    cooldown_seconds: 900
     baseline_window_minutes: 5
+    weights:
+      chat_velocity: 0.38
+      reaction_burst_z: 0.27
+      viewer_delta: 0.15
+      engagement_events: 0.12
+      keyword_burst: 0.05
+      sentiment_swing: 0.02
+      emote_density: 0.01
+    core_gate:
+      require_any: 1
+      thresholds:
+        chat_velocity_z: 2.8
+        reaction_burst_z: 0.2
+    quality:
+      min_first_time_ratio: 0.05
+      min_unique_chatters: 8
+      min_viewer_count: 15
   tiktok_account:
     username: theburntpeanut_clippy
     max_posts_per_day: 5
@@ -561,8 +567,19 @@ streamers:
     - '#clips'
   enhancement:
     preset: viral_shorts
-    performance_mode: balanced  # Use balanced mode for stability (was causing freezing)
+    performance_mode: balanced
     overrides:
+      crop_regions:
+        face:
+        - 0.12
+        - 0.55
+        - 0.42
+        - 0.95
+        gameplay:
+        - 0.0
+        - 0.0
+        - 1.0
+        - 1.0
       captions:
         enabled: true
         emphasis_map:
@@ -798,7 +815,7 @@ streamers:
 - name: timthetatman
   twitch_username: timthetatman
   broadcaster_id: '36769016'
-  enabled: true
+  enabled: false
   profile: gaming
   thresholds:
     chat_spike: 40.0
@@ -812,6 +829,17 @@ streamers:
   enhancement:
     preset: viral_shorts
     overrides:
+      crop_regions:
+        face:
+        - 0.75
+        - 0.35
+        - 0.98
+        - 0.65
+        gameplay:
+        - 0.0
+        - 0.0
+        - 1.0
+        - 1.0
       captions:
         enabled: true
         emphasis_map:
@@ -826,6 +854,107 @@ streamers:
         watermark:
           enabled: true
           handle_text: '@timthetatman_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+- name: cloakzy
+  twitch_username: cloakzy
+  broadcaster_id: '81687332'
+  enabled: false
+  profile: gaming
+  thresholds:
+    chat_spike: 50.0
+    viewer_increase: 25.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.08
+    min_unique_chatters: 12
+    cooldown_seconds: 1800
+    baseline_window_minutes: 3
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      crop_regions:
+        face:
+        - 0.02
+        - 0.7
+        - 0.3
+        - 0.98
+        gameplay:
+        - 0.0
+        - 0.0
+        - 1.0
+        - 1.0
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - CLUTCH
+        - POGGERS
+        - SHEESH
+        - WTF
+        - CLOAKZY
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@cloakzy_clippy'
+        border:
+          enabled: true
+        vignette:
+          enabled: true
+        end_slate:
+          enabled: true
+        attribution:
+          enabled: true
+- name: nickmercs
+  twitch_username: nickmercs
+  broadcaster_id: '15564828'
+  enabled: false
+  profile: gaming
+  thresholds:
+    chat_spike: 50.0
+    viewer_increase: 25.0
+    time_window: 15
+  viral_algorithm:
+    score_threshold: 0.08
+    min_unique_chatters: 5
+    cooldown_seconds: 1800
+    baseline_window_minutes: 3
+  enhancement:
+    preset: viral_shorts
+    overrides:
+      crop_regions:
+        face:
+        - 0.75
+        - 0.35
+        - 0.98
+        - 0.65
+        gameplay:
+        - 0.0
+        - 0.0
+        - 1.0
+        - 1.0
+      captions:
+        enabled: true
+        emphasis_map:
+        - INSANE
+        - NO WAY
+        - CLUTCH
+        - POGGERS
+        - SHEESH
+        - WTF
+        - NICKMERCS
+        - MFAM
+      branding:
+        watermark:
+          enabled: true
+          handle_text: '@nickmercs_clippy'
         border:
           enabled: true
         vignette:

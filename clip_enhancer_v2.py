@@ -501,6 +501,19 @@ class ClipEnhancerV2:
                 streamer_clips_dir = self.clips_dir / streamer_name
                 streamer_clips_dir.mkdir(exist_ok=True)
                 
+                # Create raw clips subdirectory for unprocessed clips
+                raw_clips_dir = streamer_clips_dir / "raw"
+                raw_clips_dir.mkdir(exist_ok=True)
+                
+                # Save a copy of the raw clip before enhancement
+                raw_clip_path = raw_clips_dir / f"raw_{streamer_name}_{timestamp}.mp4"
+                try:
+                    import shutil
+                    shutil.copy2(str(clip_path), str(raw_clip_path))
+                    logger.info(f"💾 Saved raw clip to: {raw_clip_path}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to save raw clip: {e}")
+                
                 output_path = streamer_clips_dir / f"enhanced_{streamer_name}_{timestamp}.mp4"
                 logger.info(f"📁 Saving to streamer folder: {streamer_clips_dir}")
             else:
@@ -557,7 +570,7 @@ class ClipEnhancerV2:
             
             # Story A: Format & Framing
             logger.info("📐 Applying format & framing...")
-            video, safe_zone = self._apply_format_framing(video, config.get('format', {}), streamer_name)
+            video, safe_zone = self._apply_format_framing(video, config.get('format', {}), streamer_name, streamer_config)
             
             # Story B: Captions & Copy
             logger.info("📝 Adding captions...")
@@ -681,12 +694,12 @@ class ClipEnhancerV2:
             logger.warning(f"⚠️ IRL detection failed: {e}")
             return False
     
-    def _apply_format_framing(self, video, format_config: Dict, streamer_name: str = None) -> Tuple[Any, SafeZone]:
+    def _apply_format_framing(self, video, format_config: Dict, streamer_name: str = None, streamer_config: Dict = None) -> Tuple[Any, SafeZone]:
         """
         SIMPLE STABLE LAYOUT - No split-screen, no smart analysis
         
         1. Gameplay: Resize ONCE to 1080x1920 (fills entire screen)
-        2. Facecam: Optional circular overlay at top-center (detected ONCE)
+        2. Facecam: Optional circular overlay at top-center (detected ONCE or from config)
         """
         target_w, target_h = format_config.get('target_resolution', [1080, 1920])
         safe_zones_config = format_config.get('safe_zones', {})
@@ -730,13 +743,70 @@ class ClipEnhancerV2:
             # ================================================================
             # STEP 2: FACECAM OVERLAY (optional) - Detect ONCE, position ONCE
             # ================================================================
-            is_peanut_style = streamer_name and 'theburntpeanut' in streamer_name.lower()
             face_clip = None
             
-            if is_peanut_style:
-                # FIXED CONSTANTS - BIGGER CIRCLE
-                FACE_SIZE = int(target_w * 0.35)  # 35% of width = ~378px (bigger circle!)
-                FACE_Y = int(target_h * 0.025)    # 2.5% from top (moved down a bit)
+            # Check for manual crop regions in config first
+            manual_crop_regions = None
+            if streamer_config:
+                manual_crop_regions = streamer_config.get('enhancement', {}).get('overrides', {}).get('crop_regions')
+            
+            if manual_crop_regions:
+                # Use manual crop regions from config
+                logger.info(f"📍 Using MANUAL crop regions from config for {streamer_name}")
+                
+                face_region_pct = manual_crop_regions.get('face')
+                if face_region_pct:
+                    # FIXED CONSTANTS - EVEN BIGGER CIRCLE
+                    FACE_SIZE = int(target_w * 0.42)  # 42% of width = ~453px (much bigger!)
+                    FACE_Y = int(target_h * 0.025)    # 2.5% from top
+                    FACE_X = (target_w - FACE_SIZE) // 2 - 20  # Slightly left of center
+                    
+                    # Convert percentage-based region to pixel coordinates
+                    fx1, fy1, fx2, fy2 = face_region_pct
+                    fc_x1 = int(fx1 * original_w)
+                    fc_y1 = int(fy1 * original_h)
+                    fc_x2 = int(fx2 * original_w)
+                    fc_y2 = int(fy2 * original_h)
+                    
+                    logger.info(f"✅ Manual facecam region: ({fc_x1}, {fc_y1}) to ({fc_x2}, {fc_y2})")
+                    
+                    try:
+                        # Crop and resize facecam ONCE
+                        face_clip = video.crop(x1=fc_x1, y1=fc_y1, x2=fc_x2, y2=fc_y2)
+                        face_clip = face_clip.resize((FACE_SIZE, FACE_SIZE))
+                        face_clip = face_clip.set_duration(original_duration)
+                        
+                        # Create circular TRANSPARENCY mask using MoviePy's mask system
+                        mask_array = np.zeros((FACE_SIZE, FACE_SIZE), dtype=np.uint8)
+                        center = (FACE_SIZE // 2, FACE_SIZE // 2)
+                        radius = FACE_SIZE // 2
+                        cv2.circle(mask_array, center, radius, 255, -1)
+                        
+                        # Apply mask to face clip
+                        def apply_mask_frame(get_frame, t):
+                            frame = get_frame(t)
+                            # Convert mask to 3-channel for MoviePy
+                            mask_3ch = np.stack([mask_array] * 3, axis=-1)
+                            return (frame * (mask_3ch / 255.0)).astype(np.uint8)
+                        
+                        # Store facecam info for compositing
+                        facecam_info = {
+                            'clip': face_clip,
+                            'size': FACE_SIZE,
+                            'x': FACE_X,
+                            'y': FACE_Y
+                        }
+                        
+                        logger.info(f"✅ Manual facecam overlay positioned at ({FACE_X}, {FACE_Y})")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to create manual facecam overlay: {e}")
+                        facecam_info = None
+            
+            # Fallback to theburntpeanut hardcoded logic if no manual regions
+            elif streamer_name and 'theburntpeanut' in streamer_name.lower():
+                # FIXED CONSTANTS - EVEN BIGGER CIRCLE
+                FACE_SIZE = int(target_w * 0.42)  # 42% of width = ~453px (much bigger!)
+                FACE_Y = int(target_h * 0.025)    # 2.5% from top
                 FACE_X = (target_w - FACE_SIZE) // 2 - 20  # Slightly left of center
                 
                 # theburntpeanut has TWO possible facecam positions:
@@ -806,38 +876,49 @@ class ClipEnhancerV2:
                     face_clip = face_clip.resize((FACE_SIZE, FACE_SIZE))
                     face_clip = face_clip.set_duration(original_duration)
                     
-                    # Create circular TRANSPARENCY mask using MoviePy's mask system
-                    # This properly makes pixels outside the circle transparent (not black)
-                    if CV2_AVAILABLE and np is not None and cv2 is not None:
-                        mask_size = FACE_SIZE
-                        center = (mask_size // 2, mask_size // 2)
-                        radius = mask_size // 2 - 1
-                        
-                        # Create alpha mask (white = visible, black = transparent)
-                        alpha_mask = np.zeros((mask_size, mask_size), dtype=np.float32)
-                        cv2.circle(alpha_mask, center, radius, 1.0, -1)
-                        
-                        # Create a mask clip from the alpha mask
-                        from moviepy.video.VideoClip import ImageClip
-                        mask_clip = ImageClip(alpha_mask, ismask=True, duration=original_duration)
-                        
-                        # Apply the mask to make outside pixels transparent
-                        face_clip = face_clip.set_mask(mask_clip)
-                    
-                    # Position ONCE
-                    face_clip = face_clip.set_position((FACE_X, FACE_Y))
+                    # Store facecam info for compositing
+                    facecam_info = {
+                        'clip': face_clip,
+                        'size': FACE_SIZE,
+                        'x': FACE_X,
+                        'y': FACE_Y
+                    }
                     logger.info(f"🎭 FACECAM: {FACE_SIZE}x{FACE_SIZE} at ({FACE_X}, {FACE_Y})")
                     
                 except Exception as e:
                     logger.warning(f"⚠️ Facecam extraction failed: {e}, skipping overlay")
-                    face_clip = None
+                    facecam_info = None
             
             # ================================================================
-            # STEP 3: COMPOSITE - Single operation
+            # STEP 3: COMPOSITE - Use CompositeVideoClip with proper mask
             # ================================================================
-            if face_clip is not None:
+            if facecam_info is not None:
+                # Create circular mask with smooth edges
+                mask_size = facecam_info['size']
+                center = (mask_size // 2, mask_size // 2)
+                radius = mask_size // 2 - 2
+                
+                # Create distance-based circular mask (0.0 to 1.0 for MoviePy)
+                y_coords, x_coords = np.ogrid[:mask_size, :mask_size]
+                distance_from_center = np.sqrt((x_coords - center[0])**2 + (y_coords - center[1])**2)
+                
+                # Create smooth mask with 2px feathering at edge
+                mask_array = np.clip((radius + 1 - distance_from_center) / 2.0, 0, 1)
+                
+                # Create mask clip using lambda function (MoviePy expects values 0-1)
+                mask_clip = mp.VideoClip(
+                    make_frame=lambda t: mask_array,
+                    duration=original_duration,
+                    ismask=True
+                )
+                
+                # Apply mask to facecam
+                facecam_info['clip'] = facecam_info['clip'].set_mask(mask_clip)
+                facecam_info['clip'] = facecam_info['clip'].set_position((facecam_info['x'], facecam_info['y']))
+                
+                # Composite
                 video = mp.CompositeVideoClip(
-                    [gameplay_clip, face_clip],
+                    [gameplay_clip, facecam_info['clip']],
                     size=(target_w, target_h)
                 )
                 video = video.set_duration(original_duration)
@@ -1019,7 +1100,7 @@ class ClipEnhancerV2:
             logger.warning(f"⚠️ Layout determination failed: {e}")
             return 'single_crop'
     
-    def _detect_face_and_gameplay(self, video, streamer_name: str = None) -> Tuple[Optional[Tuple], Optional[Tuple]]:
+    def _detect_face_and_gameplay(self, video, streamer_name: str = None, streamer_config: Dict = None) -> Tuple[Optional[Tuple], Optional[Tuple]]:
         """Detect face and main gameplay areas using improved face detection"""
         if not CV2_AVAILABLE:
             logger.warning("⚠️ OpenCV not available for face detection")
@@ -1028,14 +1109,49 @@ class ClipEnhancerV2:
         try:
             logger.info(f"🧠 Running SMART layout analysis for {streamer_name or 'unknown streamer'}")
             
+            # Get frame dimensions first
+            frame = video.get_frame(video.duration * 0.5)
+            frame_h, frame_w = frame.shape[:2]
+            
+            # Check for manual crop regions in streamer config
+            if streamer_config:
+                crop_regions = streamer_config.get('enhancement', {}).get('overrides', {}).get('crop_regions')
+                if crop_regions:
+                    logger.info(f"📍 Using MANUAL crop regions from config for {streamer_name}")
+                    
+                    # Convert percentage-based regions to pixel coordinates
+                    face_region_pct = crop_regions.get('face')
+                    gameplay_region_pct = crop_regions.get('gameplay')
+                    
+                    face_region = None
+                    gameplay_region = None
+                    
+                    if face_region_pct:
+                        fx1, fy1, fx2, fy2 = face_region_pct
+                        face_region = (
+                            int(fx1 * frame_w),
+                            int(fy1 * frame_h),
+                            int(fx2 * frame_w),
+                            int(fy2 * frame_h)
+                        )
+                        logger.info(f"✅ Manual face region: {face_region}")
+                    
+                    if gameplay_region_pct:
+                        gx1, gy1, gx2, gy2 = gameplay_region_pct
+                        gameplay_region = (
+                            int(gx1 * frame_w),
+                            int(gy1 * frame_h),
+                            int(gx2 * frame_w),
+                            int(gy2 * frame_h)
+                        )
+                        logger.info(f"✅ Manual gameplay region: {gameplay_region}")
+                    
+                    return face_region, gameplay_region
+            
             # Run intelligent layout analysis
             layout_analysis = self._analyze_video_layout(video)
             recommended_layout = layout_analysis['recommended_layout']
             face_regions = layout_analysis['face_regions']
-            
-            # Get frame dimensions
-            frame = video.get_frame(video.duration * 0.5)
-            frame_h, frame_w = frame.shape[:2]
                 
             # Check if this is theburntpeanut style (face at top)
             is_peanut_style = streamer_name and 'theburntpeanut' in streamer_name.lower()

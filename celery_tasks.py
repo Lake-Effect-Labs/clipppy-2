@@ -8,12 +8,19 @@ Provides automatic retry logic, task monitoring, and fault tolerance.
 """
 
 import os
+import sys
 import logging
 from pathlib import Path
 from celery import Celery, Task
 from celery.signals import task_prerun, task_postrun, task_failure
 from typing import Dict, Optional
 import json
+
+# Add project root to Python path for imports
+# This ensures Celery worker can find modules like clip_enhancer_v2
+project_root = Path(__file__).parent.absolute()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 # Load environment variables
 def load_env_file():
@@ -114,7 +121,25 @@ def enhance_clip_task(self, clip_data: Dict) -> Dict:
     """
     try:
         # Import here to avoid issues with multiprocessing
-        from clip_enhancer_v2 import ClipEnhancerV2
+        # Ensure project root is in sys.path (should already be there from module init)
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        
+        # Debug: Log current working directory and sys.path
+        logger.info(f"📂 Current working directory: {os.getcwd()}")
+        logger.info(f"📂 Project root: {project_root}")
+        logger.info(f"📂 sys.path[0]: {sys.path[0] if sys.path else 'empty'}")
+        
+        # Change working directory to project root to ensure all imports work
+        original_cwd = os.getcwd()
+        os.chdir(project_root)
+        
+        try:
+            from clip_enhancer_v2 import ClipEnhancerV2
+            logger.info("✅ Successfully imported ClipEnhancerV2")
+        finally:
+            # Restore original working directory
+            os.chdir(original_cwd)
         
         clip_url = clip_data.get('clip_url')
         streamer_name = clip_data.get('streamer_name')
@@ -144,6 +169,35 @@ def enhance_clip_task(self, clip_data: Dict) -> Dict:
         
         logger.info(f"✅ Successfully enhanced clip: {output_path}")
         
+        # Auto-queue for YouTube if enabled
+        youtube_config = streamer_config.get('youtube', {})
+        if youtube_config.get('enabled', False) and youtube_config.get('auto_upload_clips', True):
+            try:
+                # Check if clip meets minimum viral score threshold
+                viral_score = clip_data.get('viral_score', 0)
+                min_score = youtube_config.get('min_viral_score_for_youtube', 0.20)
+                
+                if viral_score >= min_score:
+                    logger.info(f"📺 Queuing for YouTube (viral score: {viral_score:.2f})")
+                    
+                    # Queue YouTube upload as separate task
+                    upload_to_youtube_task.apply_async(args=[{
+                        'video_path': output_path,
+                        'streamer_name': streamer_name,
+                        'clip_context': {
+                            'game_name': clip_data.get('game_name', 'Gaming'),
+                            'reason': clip_data.get('reason', ''),
+                            'viral_score': viral_score,
+                            'clip_url': clip_url
+                        },
+                        'is_compilation': False,
+                        'priority': youtube_config.get('clip_priority', 5)
+                    }])
+                else:
+                    logger.info(f"⏭️ Skipping YouTube (viral score {viral_score:.2f} < {min_score})")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to queue YouTube upload: {e}")
+        
         # Return results
         return {
             'success': True,
@@ -151,11 +205,14 @@ def enhance_clip_task(self, clip_data: Dict) -> Dict:
             'clip_url': clip_url,
             'streamer_name': streamer_name,
             'telemetry': {
-                'duration': telemetry.duration,
+                'processing_time_ms': telemetry.processing_time_ms,
                 'words_rendered': telemetry.words_rendered,
                 'emphasis_hits': telemetry.emphasis_hits,
-                'faces_detected': telemetry.faces_detected,
-                'enhancement_time': telemetry.enhancement_time
+                'lufs_before': telemetry.lufs_before,
+                'lufs_after': telemetry.lufs_after,
+                'cuts_count': telemetry.cuts_count,
+                'ms_removed': telemetry.ms_removed,
+                'hook_used': telemetry.hook_used
             }
         }
         
@@ -212,6 +269,97 @@ def cleanup_temp_files_task() -> Dict:
     except Exception as e:
         logger.error(f"❌ Cleanup failed: {e}")
         return {'error': str(e)}
+
+
+@app.task(name='clipppy.upload_to_youtube')
+def upload_to_youtube_task(video_data: Dict) -> Dict:
+    """
+    Celery task for uploading a video to YouTube.
+    
+    Args:
+        video_data: Dictionary containing:
+            - video_path: Path to the video file
+            - streamer_name: Name of streamer
+            - clip_context: Optional context about the clip
+            - is_compilation: Whether this is a compilation
+            - priority: Upload priority (1-10)
+            
+    Returns:
+        Dictionary with upload results
+    """
+    try:
+        from youtube_uploader import YouTubeUploader
+        
+        video_path = video_data.get('video_path')
+        streamer_name = video_data.get('streamer_name')
+        clip_context = video_data.get('clip_context')
+        is_compilation = video_data.get('is_compilation', False)
+        priority = video_data.get('priority', 5)
+        
+        logger.info(f"📺 Queuing YouTube upload for {streamer_name}: {video_path}")
+        
+        # Initialize uploader
+        uploader = YouTubeUploader()
+        
+        # Add to queue (will handle scheduling automatically)
+        uploader.queue_video(
+            video_path=video_path,
+            streamer_name=streamer_name,
+            clip_context=clip_context,
+            is_compilation=is_compilation,
+            priority=priority
+        )
+        
+        return {
+            'success': True,
+            'video_path': video_path,
+            'status': 'queued'
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ YouTube queuing failed: {error_msg}")
+        return {
+            'success': False,
+            'error': error_msg
+        }
+
+
+@app.task(name='clipppy.process_youtube_queue')
+def process_youtube_queue_task(max_uploads: int = 1) -> Dict:
+    """
+    Celery task to process the YouTube upload queue.
+    Run this periodically (e.g., every hour) to check for scheduled uploads.
+    
+    Args:
+        max_uploads: Maximum number of videos to upload in this run
+        
+    Returns:
+        Dictionary with processing results
+    """
+    try:
+        from youtube_uploader import YouTubeUploader
+        
+        logger.info("📺 Processing YouTube upload queue...")
+        
+        uploader = YouTubeUploader()
+        uploader.process_queue(max_uploads=max_uploads)
+        
+        # Get queue status
+        status = uploader.get_queue_status()
+        
+        return {
+            'success': True,
+            'queue_status': status
+        }
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ YouTube queue processing failed: {error_msg}")
+        return {
+            'success': False,
+            'error': error_msg
+        }
 
 
 # Periodic task schedule (optional)

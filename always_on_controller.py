@@ -87,7 +87,7 @@ class AlwaysOnController:
         # State tracking
         self.streamer_status: Dict[str, StreamerStatus] = {}
         self.running = False
-        self.check_interval = 1800  # 30 minutes
+        self.check_interval = 1800  # 30 minutes between checks when offline
         
         # Celery integration - no need for local workers anymore
         # Enhancement is handled by Celery workers via Redis queue
@@ -375,30 +375,38 @@ python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode
         logger.info("🔍 Starting status check cycle...")
         
         for streamer_name, status in self.streamer_status.items():
-            # Store previous state before checking
-            previous_live = status.is_live
-            
-            # Check current status
-            current_live = await self.check_streamer_status(streamer_name)
-            
-            # Handle state changes
-            if current_live and not previous_live:
-                # Streamer went live - spawn listener
-                logger.info(f"🟢 {streamer_name} went LIVE! Spawning listener...")
-                self.spawn_listener(streamer_name)
+            try:
+                # Store previous state before checking
+                previous_live = status.is_live
                 
-            elif not current_live and previous_live:
-                # Streamer went offline - kill listener
-                logger.info(f"🔴 {streamer_name} went OFFLINE! Killing listener...")
-                self.kill_listener(streamer_name)
-            
-            elif current_live and previous_live:
-                # Still live - but don't respawn unless we're sure the listener is dead
-                # The spawn_listener method has its own duplicate checking via process search
-                pass
-            
-            # Update the status after handling state changes
-            status.is_live = current_live
+                # Check current status
+                current_live = await self.check_streamer_status(streamer_name)
+                
+                # Handle state changes
+                if current_live and not previous_live:
+                    # Streamer went live - spawn listener
+                    logger.info(f"🟢 {streamer_name} went LIVE! Spawning listener...")
+                    self.spawn_listener(streamer_name)
+                    
+                elif not current_live and previous_live:
+                    # Streamer went offline - kill listener
+                    logger.info(f"🔴 {streamer_name} went OFFLINE! Killing listener...")
+                    self.kill_listener(streamer_name)
+                
+                elif current_live and previous_live:
+                    # Still live - but don't respawn unless we're sure the listener is dead
+                    # The spawn_listener method has its own duplicate checking via process search
+                    pass
+                
+                # Update the status after handling state changes
+                status.is_live = current_live
+                
+            except Exception as e:
+                logger.error(f"❌ Error checking {streamer_name}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                # Continue to next streamer even if one fails
+                continue
             
             # Small delay between checks
             await asyncio.sleep(1)
@@ -418,24 +426,34 @@ python twitch_clip_bot.py start --streamer {streamer_name} --always-on-mode
         self.running = True
         logger.info("✅ Controller started - Celery workers handle enhancement")
         
-        # Main monitoring loop
+        # Main monitoring loop with crash protection
         try:
             while self.running:
-                # Run status check cycle
-                await self.run_status_check_cycle()
+                try:
+                    # Run status check cycle
+                    await self.run_status_check_cycle()
+                    
+                    # Show current status
+                    live_count = sum(1 for s in self.streamer_status.values() if s.is_live)
+                    logger.info(f"📊 Status: {live_count}/{len(self.streamer_status)} streamers live")
+                    
+                    # Wait for next check
+                    logger.info(f"⏰ Next check in {self.check_interval} seconds...")
+                    
+                    # Use shorter sleep intervals to make shutdown more responsive
+                    for i in range(self.check_interval):
+                        if not self.running:
+                            break
+                        await asyncio.sleep(1)
                 
-                # Show current status
-                live_count = sum(1 for s in self.streamer_status.values() if s.is_live)
-                logger.info(f"📊 Status: {live_count}/{len(self.streamer_status)} streamers live")
-                
-                # Wait for next check
-                logger.info(f"⏰ Next check in {self.check_interval} seconds...")
-                
-                # Use shorter sleep intervals to make shutdown more responsive
-                for i in range(self.check_interval):
-                    if not self.running:
-                        break
-                    await asyncio.sleep(1)
+                except Exception as e:
+                    # Catch ANY error in the main loop and keep running
+                    logger.error(f"❌ Error in main loop: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    logger.info("⏩ Recovering and continuing in 30 seconds...")
+                    await asyncio.sleep(30)
+                    # Continue the while loop
                 
         except KeyboardInterrupt:
             logger.info("🛑 Shutdown requested")

@@ -1,0 +1,46 @@
+[33mcommit 1d7886bdb35e68d86f3a0eec8a7bd701cd3e0a3b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m)[m
+Author: samflipppy <samfilipiak@gmail.com>
+Date:   Thu Dec 18 16:55:42 2025 -0500
+
+    Major refactor: Redis/Celery integration, removed TikTok auto-posting, improved startup scripts
+    
+    - Integrated Redis and Celery for distributed task queue
+    - Removed TikTok auto-posting functionality (manual posting only)
+    - Fixed Ctrl+C handling in START_ALL.bat using PowerShell
+    - Added streamers: hutchmf and timthetatman (enabled)
+    - Lowered viral detection thresholds for timthetatman
+    - Added comprehensive startup/shutdown scripts (Redis, Celery, Flower)
+    - Fixed viewer count caching issue with timestamp parameter
+    - Removed unused files (tiktok_uploader, old tests, dashboard, etc.)
+    - Added documentation files for setup and changes
+    - Fixed syntax errors in twitch_clip_bot.py (removed orphaned except blocks)
+
+ CHANGES_SUMMARY.md             | 223 [32m+++++++++++++++++++[m
+ INSTALL_REDIS.md               | 213 [32m++++++++++++++++++[m
+ REDIS_CELERY_QUICKSTART.md     | 161 [32m++++++++++++++[m
+ SETUP_GUIDE.md                 | 300 [32m++++++++++++++++++++++++++[m
+ START_ALL.bat                  |  93 [32m++++++++[m
+ START_ALL.ps1                  | 101 [32m+++++++++[m
+ STOP_ALL.bat                   |  34 [32m+++[m
+ STREAMERS_AND_CLEANUP.md       | 206 [32m++++++++++++++++++[m
+ always_on_controller.py        | 197 [32m+[m[31m----------------[m
+ celery_tasks.py                | 229 [32m++++++++++++++++++++[m
+ clip_enhancer_v2.py            | 109 [32m+++++++++[m[31m-[m
+ clip_metrics.py                | 214 [31m------------------[m
+ clipppy.py                     |  32 [31m---[m
+ config/config.yaml             |  68 [32m+++++[m[31m-[m
+ config/streamers.yaml          |  18 [31m--[m
+ dashboard.py                   | 414 [31m-----------------------------------[m
+ data/tiktok_posts.json         | 250 [31m---------------------[m
+ data/upload_history.json       |  20 [31m--[m
+ requirements.txt               |  11 [32m+[m[31m-[m
+ setup.py                       |  80 [31m-------[m
+ start_celery_worker.bat        |  31 [32m+++[m
+ start_flower.bat               |  28 [32m+++[m
+ start_redis.bat                |  43 [32m++++[m
+ tests/test_auto_editor.py      | 479 [31m-----------------------------------------[m
+ tests/test_organized_system.py | 134 [31m------------[m
+ tests/test_viral_detector.py   | 276 [31m------------------------[m
+ tiktok_uploader.py             | 336 [31m-----------------------------[m
+ twitch_clip_bot.py             | 115 [32m++[m[31m--------[m
+ 28 files changed, 1867 insertions(+), 2548 deletions(-)

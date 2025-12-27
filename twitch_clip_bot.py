@@ -288,45 +288,70 @@ class TwitchClipBot:
             logger.error(f"Authentication failed: {e}")
             return False
     
-    def get_stream_data(self) -> Optional[Dict]:
-        """Get current stream data including viewer count"""
+    def get_stream_data(self, retry_on_timeout: bool = True) -> Optional[Dict]:
+        """Get current stream data including viewer count with retry logic for timeouts"""
         if not self.current_streamer:
             logger.error("No current streamer set")
             return None
-            
-        try:
-            # Add cache-busting parameter to get fresh data
-            import time
-            broadcaster_id = self.current_streamer.get('broadcaster_id')
-            # Add timestamp to prevent caching and get fresh viewer count
-            url = f"https://api.twitch.tv/helix/streams?user_id={broadcaster_id}&_t={int(time.time() * 1000)}"
-            # Add cache-control headers to ensure fresh data
-            fresh_headers = self.headers.copy()
-            fresh_headers['Cache-Control'] = 'no-cache'
-            fresh_headers['Pragma'] = 'no-cache'
-            response = requests.get(url, headers=fresh_headers, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            if data['data']:
-                stream_info = data['data'][0]
-                # Log more details about the stream data
-                viewer_count = stream_info['viewer_count']
-                game_name = stream_info.get('game_name', 'Unknown')
-                started_at = stream_info.get('started_at', 'Unknown')
-                logger.debug(f"Fresh stream data: {viewer_count} viewers, {game_name}, started: {started_at}")
-                return stream_info
-            else:
-                logger.info("Stream is offline")
-                return None
+        
+        import time
+        broadcaster_id = self.current_streamer.get('broadcaster_id')
+        max_retries = 3 if retry_on_timeout else 1
+        retry_delay = 2  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Add cache-busting parameter to get fresh data
+                url = f"https://api.twitch.tv/helix/streams?user_id={broadcaster_id}&_t={int(time.time() * 1000)}"
+                # Add cache-control headers to ensure fresh data
+                fresh_headers = self.headers.copy()
+                fresh_headers['Cache-Control'] = 'no-cache'
+                fresh_headers['Pragma'] = 'no-cache'
+                response = requests.get(url, headers=fresh_headers, timeout=15)  # Increased timeout to 15s
+                response.raise_for_status()
                 
-        except requests.RequestException as e:
-            logger.error(f"Failed to get stream data: {e}")
-            # If we can't reach Twitch API, consider stream offline for safety
-            if "Failed to resolve" in str(e) or "Max retries exceeded" in str(e):
-                logger.info("⚫ Network error - treating as offline")
-                return None
-            return None
+                data = response.json()
+                if data['data']:
+                    stream_info = data['data'][0]
+                    # Log more details about the stream data
+                    viewer_count = stream_info['viewer_count']
+                    game_name = stream_info.get('game_name', 'Unknown')
+                    started_at = stream_info.get('started_at', 'Unknown')
+                    logger.debug(f"Fresh stream data: {viewer_count} viewers, {game_name}, started: {started_at}")
+                    return stream_info
+                else:
+                    logger.info("Stream is offline")
+                    return None
+                    
+            except requests.Timeout as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ API timeout (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error(f"❌ API timeout after {max_retries} attempts: {e}")
+                    # Return a special marker to indicate timeout (not offline)
+                    return {"_timeout": True}
+                    
+            except requests.RequestException as e:
+                error_str = str(e)
+                # Distinguish between network errors and actual API errors
+                if "Failed to resolve" in error_str or "Max retries exceeded" in error_str:
+                    logger.error(f"❌ Network error: {e}")
+                    return None  # Treat as offline
+                elif "timeout" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ Request timeout (attempt {attempt + 1}/{max_retries}), retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        logger.error(f"❌ Request timeout after {max_retries} attempts: {e}")
+                        return {"_timeout": True}
+                else:
+                    logger.error(f"❌ API error: {e}")
+                    return None
+        
+        return None
     
     async def monitor_chat(self, broadcaster_name: str):
         """Monitor Twitch IRC chat for message activity"""
@@ -605,19 +630,41 @@ class TwitchClipBot:
         # Start chat monitoring in background
         chat_task = asyncio.create_task(self.monitor_chat(broadcaster_name))
         
+        # Track consecutive failures to distinguish timeout from offline
+        consecutive_failures = 0
+        max_consecutive_failures = 3  # Allow 3 failures before assuming offline
+        
         try:
             while True:
                 # Get stream data
                 stream_data = self.get_stream_data()
                 
+                # Check if it's a timeout (not offline)
+                if stream_data and stream_data.get("_timeout"):
+                    consecutive_failures += 1
+                    logger.warning(f"⚠️ API timeout ({consecutive_failures}/{max_consecutive_failures}) - continuing monitoring...")
+                    await asyncio.sleep(10)  # Wait a bit before retrying
+                    continue
+                
                 if stream_data is None:
-                    if self.always_on_mode:
-                        logger.info("⚫ Stream went offline - shutting down listener")
-                        break  # Exit the loop, let controller handle restart when live
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        if self.always_on_mode:
+                            logger.info(f"⚫ Stream appears offline after {consecutive_failures} consecutive failures - shutting down listener")
+                            break  # Exit the loop, let controller handle restart when live
+                        else:
+                            logger.info("Stream is offline, waiting...")
+                            await asyncio.sleep(30)
+                            continue
                     else:
-                        logger.info("Stream is offline, waiting...")
-                        await asyncio.sleep(30)
+                        logger.warning(f"⚠️ Stream data unavailable ({consecutive_failures}/{max_consecutive_failures}) - retrying...")
+                        await asyncio.sleep(10)
                         continue
+                
+                # Success - reset failure counter
+                if consecutive_failures > 0:
+                    logger.info(f"✅ Stream data recovered after {consecutive_failures} failures")
+                consecutive_failures = 0
                 
                 # Record viewer count
                 viewer_count = stream_data['viewer_count']
@@ -1263,6 +1310,218 @@ def test_viral_algorithm():
         click.echo("❌ Viral detector not available")
     except Exception as e:
         click.echo(f"❌ Test failed: {e}")
+
+
+@cli.command()
+@click.option('--streamer', default='theburntpeanut', help='Streamer name')
+@click.option('--days', default=7, help='Days to look back for clips')
+@click.option('--max-clips', type=int, help='Maximum number of clips to include (default: ALL clips)')
+@click.option('--min-clips', type=int, help='Minimum number of clips to include')
+@click.option('--no-intro', is_flag=True, help='Skip intro')
+@click.option('--no-transitions', is_flag=True, help='Skip transitions')
+@click.option('--output', help='Custom output path')
+@click.option('--yes', '-y', is_flag=True, help='Skip confirmation prompts')
+def weekly_compilation(streamer, days, max_clips, min_clips, no_intro, no_transitions, output, yes):
+    """Create a weekly compilation video from clips for YouTube"""
+    try:
+        from weekly_compilation import WeeklyCompilationCreator
+        from moviepy.editor import VideoFileClip
+        
+        click.echo("=" * 60)
+        click.echo("🎬 CLIPPPY WEEKLY COMPILATION CREATOR")
+        click.echo("=" * 60)
+        click.echo()
+        
+        creator = WeeklyCompilationCreator()
+        
+        # Preview available clips
+        clips_data = creator.get_raw_clips_for_streamer(
+            streamer,
+            days_back=days,
+            min_clips=min_clips,
+            max_clips=max_clips,
+            use_enhanced=True  # Use enhanced clips for now since raw clips aren't saved yet
+        )
+        
+        if not clips_data:
+            click.echo(f"❌ No clips found for {streamer}")
+            click.echo(f"   Looked in: clips/{streamer}/")
+            click.echo()
+            click.echo("💡 Make sure enhanced clips exist.")
+            click.echo("   Create some clips first with: python twitch_clip_bot.py start")
+            return
+        
+        click.echo(f"📊 Found {len(clips_data)} clips:")
+        total_duration = 0
+        
+        for idx, (clip_path, clip_time) in enumerate(clips_data, 1):
+            try:
+                clip = VideoFileClip(str(clip_path))
+                duration = clip.duration
+                clip.close()
+                total_duration += duration
+                click.echo(f"   {idx}. {clip_path.name} - {duration:.1f}s - {clip_time.strftime('%Y-%m-%d %H:%M')}")
+            except:
+                click.echo(f"   {idx}. {clip_path.name} - (could not read duration)")
+        
+        click.echo()
+        click.echo(f"⏱️ Estimated compilation length: {total_duration/60:.1f} minutes")
+        click.echo(f"🎬 Options: Intro={'Yes' if not no_intro else 'No'}, Transitions={'Yes' if not no_transitions else 'No'}")
+        click.echo()
+        
+        if not yes and not click.confirm("📹 Create compilation from these clips?", default=True):
+            click.echo("❌ Cancelled")
+            return
+        
+        # Create compilation
+        result = creator.create_compilation(
+            streamer_name=streamer,
+            days_back=days,
+            output_path=output,
+            add_intro=not no_intro,
+            add_transitions=not no_transitions,
+            max_clips=max_clips,
+            min_clips=min_clips,
+            use_enhanced=True  # Use enhanced clips for now
+        )
+        
+        if result:
+            click.echo()
+            click.echo("=" * 60)
+            click.echo(f"✅ Compilation created successfully!")
+            click.echo(f"📁 Output: {result}")
+            click.echo()
+            
+            # Ask if they want to queue for YouTube
+            if yes or click.confirm("📺 Queue this for YouTube upload?", default=True):
+                try:
+                    from youtube_uploader import YouTubeUploader
+                    uploader = YouTubeUploader()
+                    uploader.queue_video(
+                        video_path=result,
+                        streamer_name=streamer,
+                        is_compilation=True,
+                        priority=10  # High priority for compilations
+                    )
+                    click.echo("✅ Queued for YouTube!")
+                except Exception as e:
+                    click.echo(f"⚠️ Failed to queue: {e}")
+            
+            click.echo("=" * 60)
+        else:
+            click.echo()
+            click.echo("❌ Failed to create compilation")
+            
+    except ImportError as e:
+        click.echo("❌ Required libraries not available")
+        click.echo(f"   Error: {e}")
+        click.echo("   Install with: pip install moviepy")
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+@cli.command()
+def youtube_auth():
+    """Authenticate with YouTube API"""
+    try:
+        from youtube_uploader import YouTubeUploader
+        
+        click.echo("=" * 60)
+        click.echo("🔐 YOUTUBE AUTHENTICATION")
+        click.echo("=" * 60)
+        click.echo()
+        
+        uploader = YouTubeUploader()
+        
+        if uploader.authenticate():
+            click.echo("✅ Authentication successful!")
+            click.echo()
+            click.echo("You can now upload videos to YouTube.")
+        else:
+            click.echo("❌ Authentication failed")
+            click.echo()
+            click.echo("📝 Setup instructions:")
+            click.echo("   1. Go to: https://console.cloud.google.com/")
+            click.echo("   2. Create a new project")
+            click.echo("   3. Enable YouTube Data API v3")
+            click.echo("   4. Create OAuth 2.0 credentials")
+            click.echo("   5. Download credentials.json")
+            click.echo("   6. Save as: config/youtube_credentials.json")
+            
+    except ImportError:
+        click.echo("❌ YouTube API not available")
+        click.echo("   Install with: pip install google-api-python-client google-auth-oauthlib")
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+def youtube_queue_status():
+    """Check YouTube upload queue status"""
+    try:
+        from youtube_uploader import YouTubeUploader
+        
+        uploader = YouTubeUploader()
+        status = uploader.get_queue_status()
+        
+        click.echo("=" * 60)
+        click.echo("📊 YOUTUBE UPLOAD QUEUE STATUS")
+        click.echo("=" * 60)
+        click.echo()
+        click.echo(f"📋 Total items: {status['total']}")
+        click.echo(f"⏳ Pending: {status['pending']}")
+        click.echo(f"✅ Uploaded: {status['uploaded']}")
+        click.echo(f"❌ Failed: {status['failed']}")
+        click.echo()
+        
+        if status['next_upload']:
+            next_item = status['next_upload']
+            scheduled_time = datetime.fromisoformat(next_item['metadata']['scheduled_time'])
+            click.echo("📅 Next scheduled upload:")
+            click.echo(f"   Title: {next_item['metadata']['title']}")
+            click.echo(f"   Time: {scheduled_time.strftime('%A, %B %d at %I:%M %p')}")
+            click.echo(f"   Video: {next_item['video_path']}")
+        else:
+            click.echo("📭 No pending uploads")
+        
+    except ImportError:
+        click.echo("❌ YouTube uploader not available")
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+
+@cli.command()
+@click.option('--max-uploads', default=1, help='Max videos to upload in this run')
+def youtube_process_queue(max_uploads):
+    """Process YouTube upload queue"""
+    try:
+        from youtube_uploader import YouTubeUploader
+        
+        click.echo("=" * 60)
+        click.echo("📺 PROCESSING YOUTUBE QUEUE")
+        click.echo("=" * 60)
+        click.echo()
+        
+        uploader = YouTubeUploader()
+        if not uploader.authenticate():
+            click.echo("❌ Authentication failed")
+            return
+        
+        uploader.process_queue(max_uploads=max_uploads)
+        
+        # Show updated status
+        status = uploader.get_queue_status()
+        click.echo()
+        click.echo(f"✅ Processing complete!")
+        click.echo(f"   Pending: {status['pending']}")
+        click.echo(f"   Uploaded: {status['uploaded']}")
+        
+    except ImportError:
+        click.echo("❌ YouTube uploader not available")
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
