@@ -30,7 +30,11 @@ function Stop-AllServices {
     
     Write-Host "Stopping Celery Worker..." -ForegroundColor Yellow
     Get-Process | Where-Object { $_.MainWindowTitle -like "*Clipppy - Celery Worker*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*celery*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*celery*worker*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    
+    Write-Host "Stopping Celery Beat..." -ForegroundColor Yellow
+    Get-Process | Where-Object { $_.MainWindowTitle -like "*Clipppy - Celery Beat*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process python -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*celery*beat*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     
     Write-Host "Stopping Flower Dashboard..." -ForegroundColor Yellow
     Get-Process | Where-Object { $_.MainWindowTitle -like "*Clipppy - Flower*" } | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -66,6 +70,12 @@ $celeryProcess = Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "start_ce
 $processes += $celeryProcess
 Start-Sleep -Seconds 3
 
+# Start Celery Beat (scheduler for periodic tasks)
+Write-Host "Starting Celery Beat Scheduler..." -ForegroundColor Cyan
+$beatProcess = Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "start_celery_beat.bat" -WindowStyle Normal -PassThru
+$processes += $beatProcess
+Start-Sleep -Seconds 2
+
 # Start Flower Dashboard
 Write-Host "Starting Flower Dashboard..." -ForegroundColor Cyan
 $flowerProcess = Start-Process -FilePath "cmd.exe" -ArgumentList "/k", "start_flower.bat" -WindowStyle Normal -PassThru
@@ -82,9 +92,10 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host "  All Services Started!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Redis:      localhost:6379" -ForegroundColor White
-Write-Host "  Flower:     http://localhost:5555" -ForegroundColor White
-Write-Host "  Controller: Running in separate window" -ForegroundColor White
+Write-Host "  Redis:       localhost:6379" -ForegroundColor White
+Write-Host "  Flower:      http://localhost:5555" -ForegroundColor White
+Write-Host "  Controller:  Running in separate window" -ForegroundColor White
+Write-Host "  Celery Beat: YouTube uploads every hour" -ForegroundColor White
 Write-Host ""
 Write-Host "Press Ctrl+C to stop all services" -ForegroundColor Yellow
 Write-Host ""

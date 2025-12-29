@@ -174,12 +174,23 @@ class TwitchClipBot:
             except Exception:
                 pass
             
+            # Extract viral score from reason string (format: "Viral score 0.XX ...")
+            viral_score = 0.0
+            if reason and 'Viral score' in reason:
+                try:
+                    # Parse "Viral score 0.19 ≥ 0.15 | synergy ok"
+                    score_part = reason.split('Viral score')[1].split('≥')[0].strip()
+                    viral_score = float(score_part)
+                except (IndexError, ValueError):
+                    pass
+            
             job_data = {
                 'clip_url': clip_url,
                 'streamer_name': self.current_streamer.get('name'),
                 'streamer_handle': self.current_streamer.get('twitch_username'),
                 'game_name': current_game,
                 'reason': reason,
+                'viral_score': viral_score,  # Added for YouTube queueing
                 'timestamp': datetime.now().isoformat(),
                 'streamer_config': self.current_streamer
             }

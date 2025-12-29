@@ -14,7 +14,10 @@ taskkill /IM redis-server.exe /F >nul 2>&1
 
 echo Stopping Celery Worker...
 taskkill /FI "WINDOWTITLE eq Clipppy - Celery Worker*" /F >nul 2>&1
-taskkill /IM python.exe /FI "COMMANDLINE eq *celery*" /F >nul 2>&1
+taskkill /IM python.exe /FI "COMMANDLINE eq *celery*worker*" /F >nul 2>&1
+
+echo Stopping YouTube Uploader...
+taskkill /FI "WINDOWTITLE eq Clipppy - YouTube Uploader*" /F >nul 2>&1
 
 echo Stopping Flower Dashboard...
 taskkill /FI "WINDOWTITLE eq Clipppy - Flower*" /F >nul 2>&1

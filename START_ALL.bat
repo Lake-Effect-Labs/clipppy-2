@@ -28,6 +28,13 @@ start "Clipppy - Celery Worker" cmd /k start_celery_worker.bat
 REM Wait for Celery to start
 timeout /t 3 /nobreak >nul
 
+REM Start YouTube Auto-Uploader (checks queue every hour)
+echo Starting YouTube Auto-Uploader...
+start "Clipppy - YouTube Uploader" cmd /k START_YOUTUBE_PROCESSOR.bat
+
+REM Wait for YouTube processor to start
+timeout /t 2 /nobreak >nul
+
 REM Start Flower Dashboard in new window
 echo Starting Flower Dashboard...
 start "Clipppy - Flower" cmd /k start_flower.bat
@@ -44,9 +51,10 @@ echo ========================================
 echo   All Services Started!
 echo ========================================
 echo.
-echo   Redis:      localhost:6379
-echo   Flower:     http://localhost:5555
-echo   Controller: Running in separate window
+echo   Redis:       localhost:6379
+echo   Flower:      http://localhost:5555
+echo   Controller:  Running in separate window
+echo   YouTube:     Auto-uploads every hour
 echo.
 echo Press Ctrl+C to stop all services
 echo.
@@ -73,7 +81,10 @@ taskkill /IM redis-server.exe /F >nul 2>&1
 
 echo Stopping Celery Worker...
 taskkill /FI "WINDOWTITLE eq Clipppy - Celery Worker*" /F >nul 2>&1
-taskkill /IM python.exe /FI "COMMANDLINE eq *celery*" /F >nul 2>&1
+taskkill /IM python.exe /FI "COMMANDLINE eq *celery*worker*" /F >nul 2>&1
+
+echo Stopping YouTube Uploader...
+taskkill /FI "WINDOWTITLE eq Clipppy - YouTube Uploader*" /F >nul 2>&1
 
 echo Stopping Flower Dashboard...
 taskkill /FI "WINDOWTITLE eq Clipppy - Flower*" /F >nul 2>&1

@@ -170,12 +170,16 @@ def enhance_clip_task(self, clip_data: Dict) -> Dict:
         logger.info(f"✅ Successfully enhanced clip: {output_path}")
         
         # Auto-queue for YouTube if enabled
-        youtube_config = streamer_config.get('youtube', {})
+        # Load global YouTube config (not streamer-specific)
+        from twitch_clip_bot import TwitchClipBot
+        bot = TwitchClipBot('config/config.yaml')
+        youtube_config = bot.config.get('youtube', {})
+        
         if youtube_config.get('enabled', False) and youtube_config.get('auto_upload_clips', True):
             try:
                 # Check if clip meets minimum viral score threshold
                 viral_score = clip_data.get('viral_score', 0)
-                min_score = youtube_config.get('min_viral_score_for_youtube', 0.20)
+                min_score = youtube_config.get('min_viral_score_for_youtube', 0.15)
                 
                 if viral_score >= min_score:
                     logger.info(f"📺 Queuing for YouTube (viral score: {viral_score:.2f})")
@@ -193,6 +197,10 @@ def enhance_clip_task(self, clip_data: Dict) -> Dict:
                         'is_compilation': False,
                         'priority': youtube_config.get('clip_priority', 5)
                     }])
+                    
+                    # Also trigger immediate queue processing check
+                    # This ensures uploads happen without waiting for Celery Beat
+                    process_youtube_queue_task.apply_async(kwargs={'max_uploads': 10})
                 else:
                     logger.info(f"⏭️ Skipping YouTube (viral score {viral_score:.2f} < {min_score})")
             except Exception as e:
@@ -367,6 +375,11 @@ app.conf.beat_schedule = {
     'cleanup-temp-files-daily': {
         'task': 'clipppy.cleanup_temp_files',
         'schedule': 86400.0,  # Every 24 hours
+    },
+    'process-youtube-queue-hourly': {
+        'task': 'clipppy.process_youtube_queue',
+        'schedule': 3600.0,  # Every hour
+        'kwargs': {'max_uploads': 10}  # Process up to 10 videos per run
     },
 }
 

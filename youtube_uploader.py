@@ -84,76 +84,38 @@ class UploadResult:
 
 
 class OptimalScheduler:
-    """Determines optimal posting times for maximum engagement"""
-    
-    # Best posting times based on YouTube research (PST/EST converted to UTC)
-    OPTIMAL_SLOTS = {
-        'weekday': [
-            (14, 16),  # 2-4 PM (peak after-work/school)
-            (18, 20),  # 6-8 PM (evening viewing)
-        ],
-        'weekend': [
-            (9, 11),   # 9-11 AM (morning leisure)
-            (14, 16),  # 2-4 PM (afternoon)
-        ]
-    }
+    """Determines posting times using simple interval-based scheduling"""
     
     def __init__(self, config: Dict):
         self.config = config
-        self.timezone_offset = config.get('youtube', {}).get('timezone_offset_hours', -5)  # EST default
-        self.min_hours_between_posts = config.get('youtube', {}).get('min_hours_between_posts', 12)
-        self.max_posts_per_day = config.get('youtube', {}).get('max_posts_per_day', 2)
-        self.preferred_days = config.get('youtube', {}).get('preferred_days', [2, 4, 5])  # Wed, Fri, Sat
+        self.min_hours_between_posts = config.get('youtube', {}).get('min_hours_between_posts', 2)
+        self.max_posts_per_day = config.get('youtube', {}).get('max_posts_per_day', 6)
     
-    def get_next_optimal_slot(self, last_post_time: Optional[datetime] = None) -> datetime:
+    def get_next_optimal_slot(self, last_post_time: Optional[datetime] = None, queue_position: int = 0) -> datetime:
         """
-        Calculate the next optimal posting time.
+        Calculate the next posting time using simple intervals.
         
         Args:
-            last_post_time: When the last video was posted
+            last_post_time: When the last video was posted or scheduled
+            queue_position: Position in queue (0 = first, 1 = second, etc.)
             
         Returns:
-            Next optimal datetime to post
+            Next datetime to post
         """
         now = datetime.now()
         
-        # If we have a last post time, ensure minimum gap
+        # If we have a last post time, schedule after the interval
         if last_post_time:
-            min_next_time = last_post_time + timedelta(hours=self.min_hours_between_posts)
-            if min_next_time > now:
-                now = min_next_time
+            next_time = last_post_time + timedelta(hours=self.min_hours_between_posts)
+            # If that's in the past, start from now
+            if next_time < now:
+                next_time = now + timedelta(minutes=5)  # Start in 5 minutes
+        else:
+            # No previous posts, start immediately (or in 5 minutes)
+            next_time = now + timedelta(minutes=5)
         
-        # Find next optimal slot
-        current_day = now
-        for _ in range(14):  # Look up to 2 weeks ahead
-            day_of_week = current_day.weekday()
-            is_weekend = day_of_week in [5, 6]  # Saturday, Sunday
-            
-            # Check if this is a preferred day
-            if day_of_week in self.preferred_days:
-                slot_type = 'weekend' if is_weekend else 'weekday'
-                slots = self.OPTIMAL_SLOTS[slot_type]
-                
-                for start_hour, end_hour in slots:
-                    # Apply timezone offset
-                    slot_time = current_day.replace(
-                        hour=start_hour,
-                        minute=0,
-                        second=0,
-                        microsecond=0
-                    )
-                    
-                    # If this slot is in the future, use it
-                    if slot_time > now:
-                        logger.info(f"📅 Next optimal slot: {slot_time.strftime('%A, %B %d at %I:%M %p')}")
-                        return slot_time
-            
-            # Move to next day
-            current_day += timedelta(days=1)
-        
-        # Fallback: just post tomorrow at 2 PM
-        tomorrow_2pm = (now + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0)
-        return tomorrow_2pm
+        logger.info(f"📅 Next upload slot: {next_time.strftime('%A, %B %d at %I:%M %p')} (in {int((next_time - now).total_seconds() / 60)} minutes)")
+        return next_time
 
 
 class MetadataGenerator:
@@ -466,6 +428,9 @@ class YouTubeUploader:
         self.upload_queue_file = Path("data/youtube_upload_queue.json")
         self.upload_queue_file.parent.mkdir(exist_ok=True)
         
+        # Get delete_after_upload setting
+        self.delete_after_upload = self.config.get('youtube', {}).get('delete_after_upload', True)
+        
         if not YOUTUBE_API_AVAILABLE:
             logger.error("❌ YouTube API libraries not installed!")
             return
@@ -662,9 +627,9 @@ class YouTubeUploader:
             is_compilation
         )
         
-        # Calculate next optimal posting time
-        last_post_time = self._get_last_post_time(queue)
-        scheduled_time = self.scheduler.get_next_optimal_slot(last_post_time)
+        # Calculate next optimal posting time based on last scheduled video
+        last_scheduled_time = self._get_last_scheduled_time(queue)
+        scheduled_time = self.scheduler.get_next_optimal_slot(last_scheduled_time)
         metadata.scheduled_time = scheduled_time
         
         # Add to queue (convert datetime to ISO string for JSON serialization)
@@ -679,13 +644,14 @@ class YouTubeUploader:
             'is_compilation': is_compilation,
             'priority': priority,
             'queued_at': datetime.now().isoformat(),
-            'status': 'pending'
+            'status': 'pending',
+            'scheduled_time': metadata_dict['scheduled_time']  # Add at top level for easier sorting
         }
         
         queue.append(queue_item)
         
         # Sort by priority (highest first) and scheduled time
-        queue.sort(key=lambda x: (-x['priority'], x['metadata']['scheduled_time']))
+        queue.sort(key=lambda x: (-x['priority'], x['scheduled_time']))
         
         # Save queue
         self._save_queue(queue)
@@ -710,13 +676,31 @@ class YouTubeUploader:
         
         logger.info(f"📋 Processing upload queue ({len(pending)} pending)")
         
+        # Sort by priority and scheduled time to get the right order
+        pending.sort(key=lambda x: (-x.get('priority', 5), x.get('scheduled_time', '9999-12-31')))
+        
         uploaded = 0
+        now = datetime.now()
+        
+        # Get the last ACTUAL upload time to calculate intervals from
+        last_uploaded_time = self._get_last_uploaded_time(queue)
+        
         for item in pending[:max_uploads]:
-            # Check if it's time to post
-            scheduled_time = datetime.fromisoformat(item['metadata']['scheduled_time'])
-            if scheduled_time > datetime.now():
-                logger.info(f"⏰ Next upload scheduled for: {scheduled_time.strftime('%A, %B %d at %I:%M %p')}")
-                break
+            # Check if enough time has passed since last upload
+            if last_uploaded_time:
+                time_since_last = (now - last_uploaded_time).total_seconds() / 3600  # hours
+                min_interval = self.scheduler.min_hours_between_posts
+                
+                if time_since_last < min_interval:
+                    wait_time = min_interval - time_since_last
+                    next_time = last_uploaded_time + timedelta(hours=min_interval)
+                    logger.info(f"⏰ Next upload ready in {int(wait_time * 60)} minutes (at {next_time.strftime('%I:%M %p')})")
+                    break
+            
+            # Time to upload! Update scheduled time to now for logging
+            item['scheduled_time'] = now.isoformat()
+            if 'metadata' in item and isinstance(item['metadata'], dict):
+                item['metadata']['scheduled_time'] = now.isoformat()
             
             # Upload video
             metadata = VideoMetadata(**item['metadata'])
@@ -732,6 +716,19 @@ class YouTubeUploader:
             if result.success:
                 item['video_id'] = result.video_id
                 item['video_url'] = result.video_url
+                
+                # Delete the video file after successful upload (if enabled)
+                if self.delete_after_upload:
+                    try:
+                        video_file = Path(item['video_path'])
+                        if video_file.exists():
+                            video_file.unlink()
+                            logger.info(f"🗑️ Deleted uploaded video file: {video_file.name}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to delete video file: {e}")
+                
+                # Update last_uploaded_time for next iteration
+                last_uploaded_time = datetime.now()
             else:
                 item['error'] = result.error
             
@@ -761,6 +758,24 @@ class YouTubeUploader:
             return datetime.fromisoformat(last['uploaded_at'])
         return None
     
+    def _get_last_uploaded_time(self, queue: List[Dict]) -> Optional[datetime]:
+        """Get the actual upload time of the last uploaded video"""
+        uploaded = [q for q in queue if q['status'] == 'uploaded' and 'uploaded_at' in q]
+        if uploaded:
+            last = max(uploaded, key=lambda x: x['uploaded_at'])
+            return datetime.fromisoformat(last['uploaded_at'])
+        return None
+    
+    def _get_last_scheduled_time(self, queue: List[Dict]) -> Optional[datetime]:
+        """Get the scheduled time of the last pending or uploaded video"""
+        # Check both pending and uploaded videos
+        all_videos = [q for q in queue if q.get('scheduled_time')]
+        if all_videos:
+            # Find the latest scheduled time
+            last = max(all_videos, key=lambda x: x['scheduled_time'])
+            return datetime.fromisoformat(last['scheduled_time'])
+        return None
+    
     def get_queue_status(self) -> Dict:
         """Get current queue status"""
         queue = self._load_queue()
@@ -775,6 +790,41 @@ class YouTubeUploader:
             'failed': len(failed),
             'next_upload': pending[0] if pending else None
         }
+    
+    def reschedule_pending_videos(self):
+        """
+        Reschedule all pending videos using interval-based scheduling.
+        Useful when switching from optimal slots to interval-based scheduling.
+        """
+        queue = self._load_queue()
+        pending = [q for q in queue if q['status'] == 'pending']
+        
+        if not pending:
+            logger.info("📋 No pending videos to reschedule")
+            return
+        
+        logger.info(f"📅 Rescheduling {len(pending)} pending video(s) with {self.scheduler.min_hours_between_posts}h intervals...")
+        
+        # Start from now
+        next_time = datetime.now() + timedelta(minutes=5)
+        
+        for item in pending:
+            # Update scheduled time
+            item['scheduled_time'] = next_time.isoformat()
+            if 'metadata' in item and isinstance(item['metadata'], dict):
+                item['metadata']['scheduled_time'] = next_time.isoformat()
+            
+            logger.info(f"   • {item['metadata']['title'][:50]}... → {next_time.strftime('%I:%M %p')}")
+            
+            # Next video scheduled after interval
+            next_time += timedelta(hours=self.scheduler.min_hours_between_posts)
+        
+        # Sort by scheduled time
+        queue.sort(key=lambda x: x.get('scheduled_time', '9999-12-31'))
+        
+        # Save updated queue
+        self._save_queue(queue)
+        logger.info(f"✅ Rescheduled {len(pending)} video(s)")
 
 
 if __name__ == '__main__':

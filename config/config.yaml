@@ -2,16 +2,8 @@ twitch: null
 youtube:
   enabled: true
   timezone_offset_hours: -5
-  min_hours_between_posts: 4
-  max_posts_per_day: 6
-  preferred_days:
-  - 0
-  - 1
-  - 2
-  - 3
-  - 4
-  - 5
-  - 6
+  min_hours_between_posts: 2  # Post every 2 hours
+  max_posts_per_day: 12  # Up to 12 posts per day
   auto_upload_clips: true
   auto_upload_compilations: true
   compilation_priority: 10
@@ -20,7 +12,8 @@ youtube:
   made_for_kids: false
   category_id: '20'
   use_ai_metadata: true
-  min_viral_score_for_youtube: 0.2
+  min_viral_score_for_youtube: 0.15
+  delete_after_upload: true  # Delete video files after successful upload
 tiktok:
   main_account:
     username: clipppy_main
