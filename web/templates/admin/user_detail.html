@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+
+{% block title %}{{ target_user.twitch_username }} - Admin - Clipppy{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="/admin" class="text-gray-400 hover:text-white text-sm">&larr; Back to admin</a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <!-- User Info -->
+    <div class="lg:col-span-1">
+        <div class="bg-gray-800 rounded-lg p-6">
+            <div class="text-center mb-6">
+                <img src="{{ target_user.twitch_profile_image or '/static/default-avatar.png' }}"
+                     class="w-24 h-24 rounded-full mx-auto mb-4" alt="">
+                <h2 class="text-xl font-bold">{{ target_user.twitch_display_name or target_user.twitch_username }}</h2>
+                <p class="text-gray-400">@{{ target_user.twitch_username }}</p>
+                {% if target_user.is_admin %}
+                <span class="inline-block mt-2 text-xs bg-yellow-500/20 text-yellow-400 px-3 py-1 rounded">Admin</span>
+                {% endif %}
+            </div>
+
+            <div class="space-y-3 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-400">User ID:</span>
+                    <span>{{ target_user.id }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Twitch ID:</span>
+                    <span>{{ target_user.twitch_id }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Email:</span>
+                    <span>{{ target_user.twitch_email or 'Not provided' }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Joined:</span>
+                    <span>{{ target_user.created_at.strftime('%b %d, %Y') if target_user.created_at else 'Unknown' }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Last Login:</span>
+                    <span>{{ target_user.last_login_at.strftime('%b %d, %H:%M') if target_user.last_login_at else 'Never' }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Tier:</span>
+                    <span class="px-2 py-0.5 rounded text-xs
+                        {% if target_user.subscription_tier.value == 'pro' %}bg-purple-500/20 text-purple-400
+                        {% elif target_user.subscription_tier.value == 'creator' %}bg-blue-500/20 text-blue-400
+                        {% else %}bg-gray-500/20 text-gray-400{% endif %}">
+                        {{ target_user.subscription_tier.value.title() }}
+                    </span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">YouTube:</span>
+                    {% if target_user.youtube_connected %}
+                    <span class="text-green-400">{{ target_user.youtube_channel_name or 'Connected' }}</span>
+                    {% else %}
+                    <span class="text-gray-500">Not connected</span>
+                    {% endif %}
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Twitch Token:</span>
+                    <span class="{% if target_user.twitch_token_encrypted %}text-green-400{% else %}text-red-400{% endif %}">
+                        {% if target_user.twitch_token_encrypted %}Valid{% else %}Missing{% endif %}
+                    </span>
+                </div>
+            </div>
+
+            <!-- Admin Actions -->
+            <div class="mt-6 pt-6 border-t border-gray-700 space-y-3">
+                <button onclick="toggleActive()" class="w-full py-2 px-4 rounded-lg text-sm
+                    {% if target_user.is_active %}bg-red-600/20 text-red-400 hover:bg-red-600/40
+                    {% else %}bg-green-600/20 text-green-400 hover:bg-green-600/40{% endif %}">
+                    {% if target_user.is_active %}Disable Account{% else %}Enable Account{% endif %}
+                </button>
+                <button onclick="toggleAdmin()" class="w-full py-2 px-4 rounded-lg text-sm bg-yellow-600/20 text-yellow-400 hover:bg-yellow-600/40">
+                    {% if target_user.is_admin %}Revoke Admin{% else %}Grant Admin{% endif %}
+                </button>
+                <button onclick="getImpersonationToken()" class="w-full py-2 px-4 rounded-lg text-sm bg-purple-600/20 text-purple-400 hover:bg-purple-600/40">
+                    View as User
+                </button>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        {% if settings %}
+        <div class="bg-gray-800 rounded-lg p-6 mt-4">
+            <h3 class="font-semibold mb-4">User Settings</h3>
+            <div class="space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Threshold:</span>
+                    <span>{{ settings.viral_threshold }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Min Chatters:</span>
+                    <span>{{ settings.min_unique_chatters }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Cooldown:</span>
+                    <span>{{ settings.cooldown_seconds }}s</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Preset:</span>
+                    <span>{{ settings.enhancement_preset }}</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-400">Auto-Post:</span>
+                    <span>{% if settings.auto_post_enabled %}Yes{% else %}No{% endif %}</span>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- User's Clips -->
+    <div class="lg:col-span-2">
+        <div class="bg-gray-800 rounded-lg overflow-hidden">
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="font-semibold">Recent Clips</h3>
+            </div>
+
+            {% if clips %}
+            <table class="w-full">
+                <thead class="bg-gray-700/50">
+                    <tr>
+                        <th class="px-4 py-3 text-left text-sm font-medium">Title</th>
+                        <th class="px-4 py-3 text-left text-sm font-medium">Score</th>
+                        <th class="px-4 py-3 text-left text-sm font-medium">Status</th>
+                        <th class="px-4 py-3 text-left text-sm font-medium">Detected</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for clip in clips %}
+                    <tr class="border-t border-gray-700">
+                        <td class="px-4 py-3 text-sm">
+                            <div class="truncate max-w-xs" title="{{ clip.display_title }}">
+                                {{ clip.display_title }}
+                            </div>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-purple-400">
+                            {{ "%.2f"|format(clip.viral_score or 0) }}
+                        </td>
+                        <td class="px-4 py-3 text-sm">
+                            <span class="px-2 py-0.5 rounded text-xs
+                                {% if clip.status.value == 'posted' %}bg-green-500/20 text-green-400
+                                {% elif clip.status.value == 'pending_review' %}bg-yellow-500/20 text-yellow-400
+                                {% elif clip.status.value == 'processing' %}bg-blue-500/20 text-blue-400
+                                {% else %}bg-gray-500/20 text-gray-400{% endif %}">
+                                {{ clip.status.value.replace('_', ' ').title() }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-400">
+                            {{ clip.detected_at.strftime('%b %d, %H:%M') if clip.detected_at else 'Unknown' }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="p-8 text-center text-gray-500">
+                No clips yet.
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Logs placeholder -->
+        <div class="bg-gray-800 rounded-lg p-6 mt-4">
+            <h3 class="font-semibold mb-4">User Logs</h3>
+            <div class="text-center py-8 text-gray-500">
+                <p>Log viewing coming soon.</p>
+                <p class="text-sm mt-1">Will show listener activity, clip creation, uploads.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const userId = {{ target_user.id }};
+
+async function toggleActive() {
+    if (!confirm('Are you sure?')) return;
+    const response = await fetch(`/api/admin/users/${userId}/toggle-active`, { method: 'POST' });
+    if (response.ok) location.reload();
+    else alert('Failed');
+}
+
+async function toggleAdmin() {
+    if (!confirm('Are you sure you want to change admin status?')) return;
+    const response = await fetch(`/api/admin/users/${userId}/toggle-admin`, { method: 'POST' });
+    if (response.ok) location.reload();
+    else alert('Failed');
+}
+
+async function getImpersonationToken() {
+    const response = await fetch(`/api/admin/users/${userId}/impersonate`);
+    if (response.ok) {
+        const data = await response.json();
+        alert(`Impersonation token (valid 1 hour):\n\n${data.token}\n\nUse in browser console:\ndocument.cookie = "access_token=${data.token}"`);
+    } else {
+        alert('Failed to get token');
+    }
+}
+</script>
+{% endblock %}

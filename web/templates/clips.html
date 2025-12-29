@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}Clips - Clipppy{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Your Clips</h1>
+    <p class="text-gray-400">View and manage all your clips.</p>
+</div>
+
+<!-- Filters -->
+<div class="mb-6 flex space-x-2">
+    <a href="/clips" class="px-4 py-2 rounded-lg text-sm {% if not current_status %}bg-purple-600{% else %}bg-gray-700 hover:bg-gray-600{% endif %}">
+        All
+    </a>
+    <a href="/clips?status=pending_review" class="px-4 py-2 rounded-lg text-sm {% if current_status == 'pending_review' %}bg-purple-600{% else %}bg-gray-700 hover:bg-gray-600{% endif %}">
+        Pending Review
+    </a>
+    <a href="/clips?status=processing" class="px-4 py-2 rounded-lg text-sm {% if current_status == 'processing' %}bg-purple-600{% else %}bg-gray-700 hover:bg-gray-600{% endif %}">
+        Processing
+    </a>
+    <a href="/clips?status=posted" class="px-4 py-2 rounded-lg text-sm {% if current_status == 'posted' %}bg-purple-600{% else %}bg-gray-700 hover:bg-gray-600{% endif %}">
+        Posted
+    </a>
+    <a href="/clips?status=rejected" class="px-4 py-2 rounded-lg text-sm {% if current_status == 'rejected' %}bg-purple-600{% else %}bg-gray-700 hover:bg-gray-600{% endif %}">
+        Rejected
+    </a>
+</div>
+
+<!-- Clips Grid -->
+{% if clips %}
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+    {% for clip in clips %}
+    <div class="bg-gray-800 rounded-lg overflow-hidden clip-card">
+        <div class="aspect-video bg-gray-700 flex items-center justify-center relative">
+            {% if clip.thumbnail_path %}
+            <img src="{{ clip.thumbnail_path }}" class="w-full h-full object-cover" alt="Clip thumbnail">
+            {% else %}
+            <span class="text-gray-500">No thumbnail</span>
+            {% endif %}
+
+            <!-- Status badge -->
+            <span class="absolute top-2 right-2 text-xs px-2 py-1 rounded
+                {% if clip.status.value == 'pending_review' %}bg-yellow-500/80 text-yellow-100
+                {% elif clip.status.value == 'posted' %}bg-green-500/80 text-green-100
+                {% elif clip.status.value == 'processing' %}bg-blue-500/80 text-blue-100
+                {% elif clip.status.value == 'rejected' %}bg-red-500/80 text-red-100
+                {% else %}bg-gray-500/80 text-gray-100{% endif %}">
+                {{ clip.status.value.replace('_', ' ').title() }}
+            </span>
+        </div>
+        <div class="p-4">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-purple-400">Score: {{ "%.2f"|format(clip.viral_score or 0) }}</span>
+                <span class="text-xs text-gray-400">
+                    {{ clip.detected_at.strftime('%b %d, %H:%M') if clip.detected_at else 'Unknown' }}
+                </span>
+            </div>
+            <h3 class="font-medium mb-3 truncate" title="{{ clip.display_title }}">
+                {{ clip.display_title }}
+            </h3>
+            <a href="/clips/{{ clip.clip_id }}" class="block w-full bg-gray-700 hover:bg-gray-600 text-center py-2 rounded text-sm">
+                View Details
+            </a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="bg-gray-800 rounded-lg p-12 text-center">
+    <div class="text-5xl mb-4">🎬</div>
+    <p class="text-gray-400 text-lg">No clips found.</p>
+    <p class="text-gray-500 text-sm mt-2">
+        {% if current_status %}
+        No clips with status "{{ current_status.replace('_', ' ') }}".
+        {% else %}
+        Start streaming and we'll automatically detect viral moments!
+        {% endif %}
+    </p>
+</div>
+{% endif %}
+{% endblock %}

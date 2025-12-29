@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Clipppy{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+    <h1 class="text-3xl font-bold mb-2">Settings</h1>
+    <p class="text-gray-400 mb-8">Configure how Clipppy detects and processes your clips.</p>
+
+    <!-- Connected Accounts -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold mb-4">Connected Accounts</h2>
+
+        <div class="space-y-4">
+            <!-- Twitch -->
+            <div class="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg">
+                <div class="flex items-center">
+                    <div class="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center mr-4">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="font-medium">Twitch</div>
+                        <div class="text-sm text-gray-400">{{ user.twitch_username }}</div>
+                    </div>
+                </div>
+                <span class="text-green-400 text-sm">Connected</span>
+            </div>
+
+            <!-- YouTube -->
+            <div class="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg">
+                <div class="flex items-center">
+                    <div class="w-10 h-10 bg-red-600 rounded-lg flex items-center justify-center mr-4">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="font-medium">YouTube</div>
+                        <div class="text-sm text-gray-400">
+                            {% if user.youtube_connected %}
+                            {{ user.youtube_channel_name or 'Connected' }}
+                            {% else %}
+                            Not connected
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% if user.youtube_connected %}
+                <div class="flex items-center space-x-3">
+                    <span class="text-green-400 text-sm">Connected</span>
+                    <button onclick="disconnectYouTube()" class="text-red-400 hover:text-red-300 text-sm">Disconnect</button>
+                </div>
+                {% else %}
+                <a href="/auth/youtube" class="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg text-sm">Connect</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Detection Settings -->
+    <form id="settingsForm" class="bg-gray-800 rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold mb-4">Clip Detection</h2>
+
+        <div class="space-y-6">
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">
+                    Viral Threshold
+                    <span class="text-gray-500 font-normal">(lower = more clips)</span>
+                </label>
+                <input type="range" name="viral_threshold" min="0.1" max="0.8" step="0.05"
+                       value="{{ settings.viral_threshold if settings else 0.35 }}"
+                       class="w-full" oninput="updateThresholdDisplay(this)">
+                <div class="flex justify-between text-sm text-gray-400 mt-1">
+                    <span>More clips</span>
+                    <span id="thresholdValue">{{ settings.viral_threshold if settings else 0.35 }}</span>
+                    <span>Fewer clips</span>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">
+                    Minimum Unique Chatters
+                </label>
+                <input type="number" name="min_unique_chatters" min="5" max="200"
+                       value="{{ settings.min_unique_chatters if settings else 25 }}"
+                       class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white">
+                <p class="text-xs text-gray-500 mt-1">Minimum unique chatters required to trigger a clip</p>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">
+                    Cooldown Between Clips (seconds)
+                </label>
+                <input type="number" name="cooldown_seconds" min="60" max="7200"
+                       value="{{ settings.cooldown_seconds if settings else 900 }}"
+                       class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white">
+                <p class="text-xs text-gray-500 mt-1">Minimum time between clips (prevents spam)</p>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">
+                    Max Clips Per Stream
+                </label>
+                <input type="number" name="clips_per_stream" min="1" max="50"
+                       value="{{ settings.clips_per_stream if settings else 10 }}"
+                       class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white">
+            </div>
+        </div>
+    </div>
+
+    <!-- Enhancement Settings -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold mb-4">Enhancement</h2>
+
+        <div class="space-y-6">
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Enhancement Preset</label>
+                <select name="enhancement_preset" form="settingsForm"
+                        class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white">
+                    <option value="energetic" {% if settings and settings.enhancement_preset == 'energetic' %}selected{% endif %}>
+                        Energetic - High energy with effects
+                    </option>
+                    <option value="chill" {% if settings and settings.enhancement_preset == 'chill' %}selected{% endif %}>
+                        Chill - Subtle, smooth
+                    </option>
+                    <option value="hype" {% if settings and settings.enhancement_preset == 'hype' %}selected{% endif %}>
+                        Hype - Maximum viral potential
+                    </option>
+                    <option value="minimal" {% if settings and settings.enhancement_preset == 'minimal' %}selected{% endif %}>
+                        Minimal - Clean, less effects
+                    </option>
+                </select>
+            </div>
+
+            <div>
+                <label class="flex items-center">
+                    <input type="checkbox" name="include_watermark" form="settingsForm"
+                           {% if not settings or settings.include_watermark %}checked{% endif %}
+                           class="rounded bg-gray-700 border-gray-600 text-purple-600">
+                    <span class="ml-2">Include watermark</span>
+                </label>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">Watermark Text</label>
+                <input type="text" name="watermark_text" form="settingsForm"
+                       value="{{ settings.watermark_text if settings else '@' + user.twitch_username + '_clippy' }}"
+                       class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white"
+                       placeholder="@username_clippy">
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto-Post Settings -->
+    <div class="bg-gray-800 rounded-lg p-6 mb-6">
+        <h2 class="text-xl font-semibold mb-4">Auto-Posting</h2>
+
+        <div class="space-y-6">
+            <div>
+                <label class="flex items-center">
+                    <input type="checkbox" name="auto_post_enabled" form="settingsForm"
+                           {% if settings and settings.auto_post_enabled %}checked{% endif %}
+                           class="rounded bg-gray-700 border-gray-600 text-purple-600">
+                    <span class="ml-2">Enable auto-posting</span>
+                </label>
+                <p class="text-xs text-gray-500 mt-1 ml-6">Automatically post clips above threshold without review</p>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-300 mb-2">
+                    Auto-Post Threshold
+                    <span class="text-gray-500 font-normal">(only auto-post high-scoring clips)</span>
+                </label>
+                <input type="range" name="auto_post_threshold" form="settingsForm" min="0.3" max="0.9" step="0.05"
+                       value="{{ settings.auto_post_threshold if settings else 0.5 }}"
+                       class="w-full" oninput="updateAutoThresholdDisplay(this)">
+                <div class="text-center text-sm text-gray-400 mt-1">
+                    <span id="autoThresholdValue">{{ settings.auto_post_threshold if settings else 0.5 }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save Button -->
+    <div class="flex justify-between">
+        <button type="button" onclick="resetSettings()" class="text-gray-400 hover:text-white">
+            Reset to defaults
+        </button>
+        <button type="button" onclick="saveSettings()" class="bg-purple-600 hover:bg-purple-700 px-8 py-3 rounded-lg font-medium">
+            Save Settings
+        </button>
+    </div>
+</div>
+
+<script>
+function updateThresholdDisplay(input) {
+    document.getElementById('thresholdValue').textContent = input.value;
+}
+
+function updateAutoThresholdDisplay(input) {
+    document.getElementById('autoThresholdValue').textContent = input.value;
+}
+
+async function saveSettings() {
+    const form = document.getElementById('settingsForm');
+    const formData = new FormData(form);
+
+    const data = {
+        viral_threshold: parseFloat(formData.get('viral_threshold')),
+        min_unique_chatters: parseInt(formData.get('min_unique_chatters')),
+        cooldown_seconds: parseInt(formData.get('cooldown_seconds')),
+        clips_per_stream: parseInt(formData.get('clips_per_stream')),
+        enhancement_preset: formData.get('enhancement_preset'),
+        include_watermark: formData.get('include_watermark') === 'on',
+        watermark_text: formData.get('watermark_text'),
+        auto_post_enabled: formData.get('auto_post_enabled') === 'on',
+        auto_post_threshold: parseFloat(formData.get('auto_post_threshold')),
+    };
+
+    const response = await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        alert('Settings saved!');
+    } else {
+        alert('Failed to save settings');
+    }
+}
+
+async function resetSettings() {
+    if (!confirm('Reset all settings to defaults?')) return;
+
+    const response = await fetch('/api/settings/reset', { method: 'POST' });
+    if (response.ok) {
+        location.reload();
+    } else {
+        alert('Failed to reset settings');
+    }
+}
+
+async function disconnectYouTube() {
+    if (!confirm('Disconnect YouTube account?')) return;
+
+    const response = await fetch('/auth/youtube/disconnect', { method: 'POST' });
+    if (response.ok) {
+        location.reload();
+    } else {
+        alert('Failed to disconnect');
+    }
+}
+</script>
+{% endblock %}

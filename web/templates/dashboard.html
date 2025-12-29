@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Clipppy{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Welcome back, {{ user.twitch_display_name or user.twitch_username }}!</h1>
+    <p class="text-gray-400">Here's what's happening with your clips.</p>
+</div>
+
+<!-- Stats -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold text-yellow-400">{{ stats.pending }}</div>
+        <div class="text-gray-400 text-sm">Awaiting Review</div>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold text-green-400">{{ stats.posted }}</div>
+        <div class="text-gray-400 text-sm">Posted</div>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold text-blue-400">{{ stats.total }}</div>
+        <div class="text-gray-400 text-sm">Total Clips</div>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold {% if user.youtube_connected %}text-green-400{% else %}text-red-400{% endif %}">
+            {% if user.youtube_connected %}Connected{% else %}Not Connected{% endif %}
+        </div>
+        <div class="text-gray-400 text-sm">YouTube</div>
+        {% if not user.youtube_connected %}
+        <a href="/auth/youtube" class="text-purple-400 text-sm hover:underline">Connect now</a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Pending Clips -->
+<div class="mb-8">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold">Clips Awaiting Review ({{ pending_clips|length }})</h2>
+        <a href="/clips?status=pending_review" class="text-purple-400 hover:underline text-sm">View all</a>
+    </div>
+
+    {% if pending_clips %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for clip in pending_clips[:6] %}
+        <div class="bg-gray-800 rounded-lg overflow-hidden clip-card">
+            <div class="aspect-video bg-gray-700 flex items-center justify-center">
+                {% if clip.thumbnail_path %}
+                <img src="{{ clip.thumbnail_path }}" class="w-full h-full object-cover" alt="Clip thumbnail">
+                {% else %}
+                <span class="text-gray-500">No thumbnail</span>
+                {% endif %}
+            </div>
+            <div class="p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-purple-400 bg-purple-400/20 px-2 py-1 rounded">
+                        Score: {{ "%.2f"|format(clip.viral_score or 0) }}
+                    </span>
+                    <span class="text-xs text-gray-400">
+                        {{ clip.detected_at.strftime('%b %d, %H:%M') if clip.detected_at else 'Unknown' }}
+                    </span>
+                </div>
+                <h3 class="font-medium mb-2 truncate">{{ clip.suggested_title or 'Untitled Clip' }}</h3>
+                <div class="flex space-x-2">
+                    <a href="/clips/{{ clip.clip_id }}" class="flex-1 bg-purple-600 hover:bg-purple-700 text-center py-2 rounded text-sm">
+                        Review
+                    </a>
+                    <button onclick="rejectClip('{{ clip.clip_id }}')" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">
+                        Reject
+                    </button>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="bg-gray-800 rounded-lg p-8 text-center">
+        <div class="text-4xl mb-4">🎬</div>
+        <p class="text-gray-400">No clips awaiting review.</p>
+        <p class="text-gray-500 text-sm mt-2">Start streaming and we'll automatically detect viral moments!</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Recent Posted -->
+<div>
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold">Recently Posted</h2>
+        <a href="/clips?status=posted" class="text-purple-400 hover:underline text-sm">View all</a>
+    </div>
+
+    {% if posted_clips %}
+    <div class="bg-gray-800 rounded-lg overflow-hidden">
+        <table class="w-full">
+            <thead class="bg-gray-700">
+                <tr>
+                    <th class="px-4 py-3 text-left text-sm font-medium">Title</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium">Score</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium">Posted</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium">Link</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for clip in posted_clips %}
+                <tr class="border-t border-gray-700">
+                    <td class="px-4 py-3 text-sm">{{ clip.display_title }}</td>
+                    <td class="px-4 py-3 text-sm text-purple-400">{{ "%.2f"|format(clip.viral_score or 0) }}</td>
+                    <td class="px-4 py-3 text-sm text-gray-400">
+                        {{ clip.posted_at.strftime('%b %d') if clip.posted_at else 'Unknown' }}
+                    </td>
+                    <td class="px-4 py-3 text-sm">
+                        {% if clip.youtube_url %}
+                        <a href="{{ clip.youtube_url }}" target="_blank" class="text-purple-400 hover:underline">YouTube</a>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-gray-800 rounded-lg p-8 text-center">
+        <p class="text-gray-400">No clips posted yet.</p>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+async function rejectClip(clipId) {
+    if (!confirm('Are you sure you want to reject this clip?')) return;
+
+    const response = await fetch(`/api/clips/${clipId}/reject`, { method: 'POST' });
+    if (response.ok) {
+        location.reload();
+    } else {
+        alert('Failed to reject clip');
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Clipppy{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        .clip-card:hover { transform: translateY(-2px); transition: transform 0.2s; }
+    </style>
+    {% block head %}{% endblock %}
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <a href="/dashboard" class="text-xl font-bold text-purple-400">Clipppy</a>
+                    {% if user %}
+                    <div class="ml-10 flex items-baseline space-x-4">
+                        <a href="/dashboard" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700">Dashboard</a>
+                        <a href="/clips" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700">Clips</a>
+                        <a href="/settings" class="px-3 py-2 rounded-md text-sm font-medium hover:bg-gray-700">Settings</a>
+                        {% if user.is_admin %}
+                        <a href="/admin" class="px-3 py-2 rounded-md text-sm font-medium text-yellow-400 hover:bg-gray-700">Admin</a>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="flex items-center">
+                    {% if user %}
+                    <div class="flex items-center space-x-3">
+                        <img src="{{ user.twitch_profile_image or '/static/default-avatar.png' }}"
+                             class="w-8 h-8 rounded-full" alt="Profile">
+                        <span class="text-sm">{{ user.twitch_display_name or user.twitch_username }}</span>
+                        <a href="/auth/logout" class="text-sm text-gray-400 hover:text-white">Logout</a>
+                    </div>
+                    {% else %}
+                    <a href="/auth/twitch" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-md text-sm font-medium">
+                        Login with Twitch
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 py-4 text-center text-gray-400 text-sm">
+            Clipppy - Automated viral clip detection for streamers
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

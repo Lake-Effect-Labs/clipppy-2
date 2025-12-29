@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+
+{% block title %}{{ clip.display_title }} - Clipppy{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="/clips" class="text-gray-400 hover:text-white text-sm">&larr; Back to clips</a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+    <!-- Video Preview -->
+    <div>
+        <div class="bg-gray-800 rounded-lg overflow-hidden">
+            <div class="aspect-[9/16] bg-gray-700 flex items-center justify-center">
+                {% if clip.enhanced_clip_path %}
+                <video controls class="w-full h-full object-contain">
+                    <source src="{{ clip.enhanced_clip_path }}" type="video/mp4">
+                    Your browser does not support video.
+                </video>
+                {% elif clip.twitch_clip_url %}
+                <iframe src="{{ clip.twitch_clip_url }}&parent=localhost"
+                        class="w-full h-full" frameborder="0" allowfullscreen></iframe>
+                {% else %}
+                <span class="text-gray-500">No video available</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Detection Info -->
+        <div class="mt-4 bg-gray-800 rounded-lg p-4">
+            <h3 class="font-semibold mb-3">Detection Details</h3>
+            <div class="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                    <span class="text-gray-400">Viral Score:</span>
+                    <span class="ml-2 text-purple-400 font-medium">{{ "%.3f"|format(clip.viral_score or 0) }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Status:</span>
+                    <span class="ml-2">{{ clip.status.value.replace('_', ' ').title() }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Detected:</span>
+                    <span class="ml-2">{{ clip.detected_at.strftime('%b %d, %Y %H:%M') if clip.detected_at else 'Unknown' }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-400">Game:</span>
+                    <span class="ml-2">{{ clip.game_name or 'Unknown' }}</span>
+                </div>
+            </div>
+            {% if clip.trigger_reason %}
+            <div class="mt-3 text-sm">
+                <span class="text-gray-400">Trigger:</span>
+                <span class="ml-2 text-gray-300">{{ clip.trigger_reason }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Edit Form -->
+    <div>
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h2 class="text-xl font-semibold mb-4">Edit & Post</h2>
+
+            <form id="clipForm">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Title</label>
+                    <input type="text" name="title"
+                           value="{{ clip.final_title or clip.suggested_title or '' }}"
+                           class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-purple-500"
+                           placeholder="Enter title...">
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Description</label>
+                    <textarea name="description" rows="4"
+                              class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-purple-500"
+                              placeholder="Enter description...">{{ clip.final_description or clip.suggested_description or '' }}</textarea>
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Tags</label>
+                    <input type="text" name="tags"
+                           value="{{ (clip.final_tags or clip.suggested_tags or [])|join(', ') }}"
+                           class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-purple-500"
+                           placeholder="tag1, tag2, tag3...">
+                    <p class="text-xs text-gray-500 mt-1">Separate tags with commas</p>
+                </div>
+
+                {% if clip.status.value == 'pending_review' %}
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Post To</label>
+                    <div class="space-y-2">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="post_youtube" checked
+                                   class="rounded bg-gray-700 border-gray-600 text-purple-600 focus:ring-purple-500">
+                            <span class="ml-2">YouTube</span>
+                            {% if not user.youtube_connected %}
+                            <span class="ml-2 text-xs text-yellow-500">(not connected)</span>
+                            {% endif %}
+                        </label>
+                        <label class="flex items-center">
+                            <input type="checkbox" name="post_tiktok"
+                                   class="rounded bg-gray-700 border-gray-600 text-purple-600 focus:ring-purple-500">
+                            <span class="ml-2">TikTok</span>
+                            <span class="ml-2 text-xs text-gray-500">(coming soon)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="flex space-x-3">
+                    <button type="button" onclick="approveClip()"
+                            class="flex-1 bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-medium">
+                        Approve & Post
+                    </button>
+                    <button type="button" onclick="saveChanges()"
+                            class="px-6 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium">
+                        Save
+                    </button>
+                    <button type="button" onclick="rejectClip()"
+                            class="px-6 py-3 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded-lg font-medium">
+                        Reject
+                    </button>
+                </div>
+                {% elif clip.status.value == 'posted' %}
+                <div class="bg-green-500/20 border border-green-500/50 rounded-lg p-4 text-center">
+                    <div class="text-green-400 font-medium mb-2">Posted Successfully!</div>
+                    {% if clip.youtube_url %}
+                    <a href="{{ clip.youtube_url }}" target="_blank" class="text-purple-400 hover:underline">
+                        View on YouTube &rarr;
+                    </a>
+                    {% endif %}
+                </div>
+                {% elif clip.status.value == 'rejected' %}
+                <div class="bg-gray-700/50 rounded-lg p-4 text-center">
+                    <div class="text-gray-400 mb-2">This clip was rejected.</div>
+                    <button type="button" onclick="reenhanceClip()"
+                            class="text-purple-400 hover:underline">
+                        Re-enhance with different settings?
+                    </button>
+                </div>
+                {% elif clip.status.value == 'processing' %}
+                <div class="bg-blue-500/20 border border-blue-500/50 rounded-lg p-4 text-center">
+                    <div class="text-blue-400 font-medium">Processing...</div>
+                    <p class="text-gray-400 text-sm mt-1">This clip is being enhanced. Check back soon.</p>
+                </div>
+                {% endif %}
+            </form>
+        </div>
+
+        <!-- Re-enhance Options -->
+        {% if clip.status.value in ['pending_review', 'rejected'] %}
+        <div class="mt-4 bg-gray-800 rounded-lg p-6">
+            <h3 class="font-semibold mb-3">Enhancement Options</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Preset</label>
+                    <select id="enhancePreset" class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white">
+                        <option value="energetic">Energetic</option>
+                        <option value="chill">Chill</option>
+                        <option value="hype">Hype / MrBeast Style</option>
+                        <option value="minimal">Minimal</option>
+                    </select>
+                </div>
+                <button type="button" onclick="reenhanceClip()"
+                        class="w-full bg-purple-600/20 hover:bg-purple-600/40 text-purple-400 px-4 py-2 rounded-lg">
+                    Re-enhance with New Settings
+                </button>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+const clipId = '{{ clip.clip_id }}';
+
+function getFormData() {
+    const form = document.getElementById('clipForm');
+    const tagsInput = form.querySelector('[name="tags"]').value;
+    return {
+        final_title: form.querySelector('[name="title"]').value,
+        final_description: form.querySelector('[name="description"]').value,
+        final_tags: tagsInput ? tagsInput.split(',').map(t => t.trim()).filter(t => t) : []
+    };
+}
+
+async function saveChanges() {
+    const data = getFormData();
+    const response = await fetch(`/api/clips/${clipId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        alert('Changes saved!');
+    } else {
+        alert('Failed to save changes');
+    }
+}
+
+async function approveClip() {
+    const data = getFormData();
+    const form = document.getElementById('clipForm');
+    data.post_to_youtube = form.querySelector('[name="post_youtube"]').checked;
+    data.post_to_tiktok = form.querySelector('[name="post_tiktok"]').checked;
+
+    const response = await fetch(`/api/clips/${clipId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    });
+
+    if (response.ok) {
+        location.reload();
+    } else {
+        alert('Failed to approve clip');
+    }
+}
+
+async function rejectClip() {
+    if (!confirm('Are you sure you want to reject this clip?')) return;
+
+    const response = await fetch(`/api/clips/${clipId}/reject`, { method: 'POST' });
+    if (response.ok) {
+        location.href = '/clips';
+    } else {
+        alert('Failed to reject clip');
+    }
+}
+
+async function reenhanceClip() {
+    const preset = document.getElementById('enhancePreset')?.value || 'energetic';
+
+    const response = await fetch(`/api/clips/${clipId}/reenhance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enhancement_preset: preset })
+    });
+
+    if (response.ok) {
+        location.reload();
+    } else {
+        alert('Failed to start re-enhancement');
+    }
+}
+</script>
+{% endblock %}

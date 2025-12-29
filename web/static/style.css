@@ -1,0 +1,106 @@
+/* Additional styles for Clipppy Dashboard */
+
+/* Clip card hover effect */
+.clip-card {
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.clip-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1f2937;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #4b5563;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+}
+
+/* Video container aspect ratio */
+.aspect-video {
+    aspect-ratio: 16 / 9;
+}
+
+.aspect-\[9\/16\] {
+    aspect-ratio: 9 / 16;
+}
+
+/* Loading spinner */
+.spinner {
+    border: 3px solid #374151;
+    border-top-color: #8b5cf6;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Pulse animation for live indicators */
+.pulse {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* Range input styling */
+input[type="range"] {
+    -webkit-appearance: none;
+    height: 6px;
+    background: #374151;
+    border-radius: 3px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    background: #8b5cf6;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+    background: #7c3aed;
+}
+
+/* Focus states */
+input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
+/* Table styles */
+table {
+    border-collapse: collapse;
+}
+
+tbody tr:hover {
+    background-color: rgba(75, 85, 99, 0.3);
+}

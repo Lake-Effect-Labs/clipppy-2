@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Clipppy - Auto-clip your Twitch streams{% endblock %}
+
+{% block content %}
+<div class="text-center py-20">
+    <h1 class="text-5xl font-bold mb-6">
+        <span class="text-purple-400">Auto-clip</span> your Twitch streams
+    </h1>
+    <p class="text-xl text-gray-400 mb-8 max-w-2xl mx-auto">
+        Clipppy watches your stream 24/7, detects viral moments using chat activity,
+        and creates ready-to-post clips for YouTube and TikTok.
+    </p>
+
+    <a href="/auth/twitch" class="inline-flex items-center bg-purple-600 hover:bg-purple-700 px-8 py-4 rounded-lg text-lg font-medium">
+        <svg class="w-6 h-6 mr-2" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/>
+        </svg>
+        Login with Twitch
+    </a>
+
+    <div class="mt-20 grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
+        <div class="bg-gray-800 p-6 rounded-lg">
+            <div class="text-3xl mb-4">🎯</div>
+            <h3 class="text-lg font-semibold mb-2">Smart Detection</h3>
+            <p class="text-gray-400 text-sm">
+                Our algorithm analyzes chat velocity, reactions, and engagement to find your best moments.
+            </p>
+        </div>
+        <div class="bg-gray-800 p-6 rounded-lg">
+            <div class="text-3xl mb-4">🎬</div>
+            <h3 class="text-lg font-semibold mb-2">Auto Enhancement</h3>
+            <p class="text-gray-400 text-sm">
+                Clips are automatically cropped, captioned, and enhanced for maximum viral potential.
+            </p>
+        </div>
+        <div class="bg-gray-800 p-6 rounded-lg">
+            <div class="text-3xl mb-4">📱</div>
+            <h3 class="text-lg font-semibold mb-2">Easy Posting</h3>
+            <p class="text-gray-400 text-sm">
+                Review clips in your dashboard and post to YouTube with one click.
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

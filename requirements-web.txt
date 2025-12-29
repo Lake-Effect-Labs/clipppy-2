@@ -1,0 +1,34 @@
+# Clipppy Web Application Requirements
+# Install with: pip install -r requirements-web.txt
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Templates
+jinja2>=3.1.2
+
+# Database
+sqlalchemy>=2.0.0
+alembic>=1.12.0  # For migrations
+
+# Authentication
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+cryptography>=41.0.0
+
+# HTTP client (for OAuth)
+httpx>=0.25.0
+
+# Async support
+websockets>=12.0
+
+# Existing requirements (already in requirements.txt but listed for clarity)
+# pyyaml
+# python-dotenv
+# celery
+# redis
+# google-api-python-client
+# google-auth-oauthlib
+# anthropic
+# openai

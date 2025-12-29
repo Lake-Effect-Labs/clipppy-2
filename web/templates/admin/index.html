@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Clipppy{% endblock %}
+
+{% block content %}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Admin Dashboard</h1>
+    <p class="text-gray-400">System overview and management.</p>
+</div>
+
+<!-- Stats -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold text-purple-400">{{ stats.total_users }}</div>
+        <div class="text-gray-400 text-sm">Total Users</div>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold text-green-400">{{ stats.active_users }}</div>
+        <div class="text-gray-400 text-sm">Active Users</div>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold text-blue-400">{{ stats.total_clips }}</div>
+        <div class="text-gray-400 text-sm">Total Clips</div>
+    </div>
+    <div class="bg-gray-800 p-6 rounded-lg">
+        <div class="text-3xl font-bold text-yellow-400">{{ stats.pending_clips }}</div>
+        <div class="text-gray-400 text-sm">Pending Review</div>
+    </div>
+</div>
+
+<!-- System Health -->
+<div class="bg-gray-800 rounded-lg p-6 mb-8">
+    <h2 class="text-xl font-semibold mb-4">System Health</h2>
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
+            <span>Database</span>
+            <span class="text-green-400">Healthy</span>
+        </div>
+        <div class="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
+            <span>Redis</span>
+            <span class="text-gray-400">Not configured</span>
+        </div>
+        <div class="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
+            <span>Workers</span>
+            <span class="text-gray-400">Not configured</span>
+        </div>
+        <div class="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
+            <span>Orchestrator</span>
+            <span class="text-gray-400">Not running</span>
+        </div>
+    </div>
+</div>
+
+<!-- Active Listeners -->
+<div class="bg-gray-800 rounded-lg p-6 mb-8">
+    <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold">Active Listeners</h2>
+        <span class="text-gray-400 text-sm">0 live now</span>
+    </div>
+    <div class="text-center py-8 text-gray-500">
+        <p>No active listeners.</p>
+        <p class="text-sm mt-1">Listeners start automatically when users go live.</p>
+    </div>
+</div>
+
+<!-- Recent Users -->
+<div class="bg-gray-800 rounded-lg overflow-hidden">
+    <div class="p-4 border-b border-gray-700">
+        <h2 class="text-xl font-semibold">Recent Users</h2>
+    </div>
+    <table class="w-full">
+        <thead class="bg-gray-700/50">
+            <tr>
+                <th class="px-4 py-3 text-left text-sm font-medium">User</th>
+                <th class="px-4 py-3 text-left text-sm font-medium">Joined</th>
+                <th class="px-4 py-3 text-left text-sm font-medium">Tier</th>
+                <th class="px-4 py-3 text-left text-sm font-medium">YouTube</th>
+                <th class="px-4 py-3 text-left text-sm font-medium">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in recent_users %}
+            <tr class="border-t border-gray-700 hover:bg-gray-700/30">
+                <td class="px-4 py-3">
+                    <div class="flex items-center">
+                        <img src="{{ u.twitch_profile_image or '/static/default-avatar.png' }}"
+                             class="w-8 h-8 rounded-full mr-3" alt="">
+                        <div>
+                            <div class="font-medium">{{ u.twitch_display_name or u.twitch_username }}</div>
+                            <div class="text-xs text-gray-400">{{ u.twitch_username }}</div>
+                        </div>
+                        {% if u.is_admin %}
+                        <span class="ml-2 text-xs bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">Admin</span>
+                        {% endif %}
+                    </div>
+                </td>
+                <td class="px-4 py-3 text-sm text-gray-400">
+                    {{ u.created_at.strftime('%b %d, %Y') if u.created_at else 'Unknown' }}
+                </td>
+                <td class="px-4 py-3 text-sm">
+                    <span class="px-2 py-1 rounded text-xs
+                        {% if u.subscription_tier.value == 'pro' %}bg-purple-500/20 text-purple-400
+                        {% elif u.subscription_tier.value == 'creator' %}bg-blue-500/20 text-blue-400
+                        {% else %}bg-gray-500/20 text-gray-400{% endif %}">
+                        {{ u.subscription_tier.value.title() }}
+                    </span>
+                </td>
+                <td class="px-4 py-3 text-sm">
+                    {% if u.youtube_connected %}
+                    <span class="text-green-400">Connected</span>
+                    {% else %}
+                    <span class="text-gray-500">No</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-3 text-sm">
+                    <a href="/admin/users/{{ u.id }}" class="text-purple-400 hover:underline">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
