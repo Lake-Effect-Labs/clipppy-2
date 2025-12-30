@@ -61,6 +61,7 @@ SCOPES = [
 
 
 @dataclass
+@dataclass
 class VideoMetadata:
     """Metadata for a YouTube video"""
     title: str
@@ -651,7 +652,8 @@ class YouTubeUploader:
         queue.append(queue_item)
         
         # Sort by priority (highest first) and scheduled time
-        queue.sort(key=lambda x: (-x['priority'], x['scheduled_time']))
+        # Handle old queue items that might not have scheduled_time at top level
+        queue.sort(key=lambda x: (-x['priority'], x.get('scheduled_time', x.get('metadata', {}).get('scheduled_time', ''))))
         
         # Save queue
         self._save_queue(queue)

@@ -524,9 +524,9 @@ streamers:
     viewer_increase: 35.0
     time_window: 15
   viral_algorithm:
-    score_threshold: 0.3
-    min_unique_chatters: 35
-    cooldown_seconds: 900
+    score_threshold: 0.20  # Slightly lower than original 0.24
+    min_unique_chatters: 15  # Lower quality gate - was comparing to baseline
+    cooldown_seconds: 1800  # 30 minutes between clips
     baseline_window_minutes: 5
     weights:
       chat_velocity: 0.38
@@ -537,14 +537,14 @@ streamers:
       sentiment_swing: 0.02
       emote_density: 0.01
     core_gate:
-      require_any: 1
+      require_any: 1  # Only need 1 signal (was 2)
       thresholds:
-        chat_velocity_z: 2.8
-        reaction_burst_z: 0.2
+        chat_velocity_z: 0.5  # Slightly lower than original 0.6
+        reaction_burst_z: 0.3  # Slightly lower than original 0.4
     quality:
-      min_first_time_ratio: 0.05
-      min_unique_chatters: 8
-      min_viewer_count: 15
+      min_first_time_ratio: 0.03  # Slightly lower than original 0.05
+      min_unique_chatters: 7  # Slightly lower than original 8
+      min_viewer_count: 12  # Slightly lower than original 15
   tiktok_account:
     username: theburntpeanut_clippy
     max_posts_per_day: 5
