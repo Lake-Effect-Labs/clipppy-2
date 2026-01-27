@@ -465,14 +465,25 @@ class YouTubeUploader:
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 logger.info("🔄 Refreshing YouTube credentials...")
-                creds.refresh(Request())
-            else:
+                try:
+                    creds.refresh(Request())
+                except Exception as e:
+                    logger.warning(f"⚠️ Token refresh failed: {e}")
+                    logger.info("🔄 Starting fresh OAuth flow...")
+                    # Delete old token file since refresh failed
+                    if self.token_file.exists():
+                        self.token_file.unlink()
+                    creds = None  # Force new OAuth flow
+            
+            # If refresh failed or no credentials, start fresh OAuth
+            if not creds or not creds.valid:
                 if not self.credentials_file.exists():
                     logger.error(f"❌ Credentials file not found: {self.credentials_file}")
                     logger.error("   Get credentials from: https://console.cloud.google.com/")
                     return False
                 
                 logger.info("🔐 Starting YouTube OAuth flow...")
+                logger.info("   A browser window will open for authentication...")
                 flow = InstalledAppFlow.from_client_secrets_file(
                     str(self.credentials_file),
                     SCOPES
